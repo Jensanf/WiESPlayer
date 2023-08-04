@@ -4,43 +4,110 @@
 #include <ESPmDNS.h>
 #include <Update.h>
 #include <EEPROM.h>
+#include <HTTPClient.h>
+#include "Audio.h"
+#include "SPI.h"
+#include "SD.h"
+#include "FS.h"
 
-//Defines
+// Digital I/O used
+#define SD_CS          5
+#define SPI_MOSI      23
+#define SPI_MISO      19
+#define SPI_SCK       18
+#define I2S_DOUT      25
+#define I2S_BCLK      27
+#define I2S_LRC       26
+
+// Defines
 #define EEPROM_SIZE 512
 #define GLOABAL_SSID_ADDR 0
 #define GLOABAL_PASSWORD_ADDR 100
 #define MAX_ATTEMPTS 20            // How many repeates do WIFi connection
+#define SPI_FREQ 10000000
 
-//Constants
+#define MAX_TRACKS 1000
+String tracks[MAX_TRACKS];
+int trackCount = 0;
+int currentTrack = 0;
+
+// Constants
 const char* AP_SSID = "ESP32";
 const char* AP_PASSWORD = "12345678";
 const char* HOSTNAME = "esp32";
 const char* serverIndex = "<form method='POST' action='/update' enctype='multipart/form-data'>"
                           "<input type='file' name='update'><input type='submit' value='Update'></form>";
-//Server
+
+// Global variables
+int currentVolume = 5; // Starting volume of audio player
+
+// Server
 AsyncWebServer server(80);
 
+Audio audio;
+File rootDirectory;
+HTTPClient httpClient;
+
 // Function prototypes
-void createWiFi_AP();
-void configOTA();
+void createWiFi_AP(void);
+void configOTA(void);
 bool connectToGlobalWiFi(const char* ssid, const char* password);
 String readStringEEPROM(int addr);
 void writeStringEEPROM(int addr, String data);
+bool isMusicFile(String fileName);
 
 void setup() {
+  pinMode(SD_CS, OUTPUT);      
+  digitalWrite(SD_CS, HIGH);
+  SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
+  SPI.setFrequency(SPI_FREQ);
+
+  audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
+  
+  while (!SD.begin(SD_CS));
+
   EEPROM.begin(EEPROM_SIZE);
-  if(!connectToGlobalWiFi(readStringEEPROM(GLOABAL_SSID_ADDR).c_str(), readStringEEPROM(GLOABAL_PASSWORD_ADDR).c_str())) {
+  if(!connectToGlobalWiFi(readStringEEPROM(GLOABAL_SSID_ADDR).c_str(), 
+                          readStringEEPROM(GLOABAL_PASSWORD_ADDR).c_str())) {
     createWiFi_AP();
   }
   MDNS.begin(HOSTNAME);
-  configOTA();
-  configWiFiLoginData(GLOABAL_SSID_ADDR, GLOABAL_PASSWORD_ADDR); 
-  MDNS.addService("http", "tcp", 80);
   
+  configOTA();
+  configWiFiLoginData(GLOABAL_SSID_ADDR, GLOABAL_PASSWORD_ADDR);
+  server.begin();
+  
+  MDNS.addService("http", "tcp", 80);
+  audio.setVolume(currentVolume); // 0...21
+
+  rootDirectory = SD.open("/");
+  File file = rootDirectory.openNextFile();
+  while(file && trackCount < MAX_TRACKS) {
+    if (isMusicFile(file.name())) {
+      tracks[trackCount++] = String(file.name());
+    }
+    file = rootDirectory.openNextFile();
+  }
 }
 
 void loop() {
-  delay(2); 
+  if (!audio.isRunning() && trackCount > 0) {
+    // start playing the next track
+    audio.connecttoSD(tracks[currentTrack].c_str());
+    currentTrack = (currentTrack + 1) % trackCount; // loop back to the first track after the last one
+  }
+  audio.loop();
+}
+
+// void audio_info(const char *info) {
+//   Serial.print("info        "); 
+//   Serial.println(info);
+// }
+
+bool isMusicFile(String fileName) {
+  String extension = fileName.substring(fileName.lastIndexOf('.') + 1);
+  extension.toLowerCase();
+  return (extension == "mp3" || extension == "MP3");
 }
 
 bool connectToGlobalWiFi(const char* ssid, const char* password) {
@@ -63,6 +130,7 @@ void createWiFi_AP() {
 void configOTA() {
   server.on("/update", HTTP_GET, [](AsyncWebServerRequest *request) {
     request->send(200, "text/html", serverIndex);
+    audio.pauseResume();  // Mute audio here before starting the update
   });
 
   server.on("/update", HTTP_POST, [](AsyncWebServerRequest *request) {
@@ -87,8 +155,6 @@ void configOTA() {
       }
     }
   });
-
-  server.begin();
 }
 
 void configWiFiLoginData (int ssid_addr, int pass_addr) {
