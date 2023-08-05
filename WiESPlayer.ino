@@ -88,17 +88,19 @@ void setup() {
     }
     file = rootDirectory.openNextFile();
   }
+  audio.connecttoSD(tracks[currentTrack].c_str());
 }
 
 void loop() {
-  if (!audio.isRunning() && trackCount > 0) {
-    // start playing the next track
-    audio.connecttoSD(tracks[currentTrack].c_str());
-    currentTrack = (currentTrack + 1) % trackCount; // loop back to the first track after the last one
-  }
   audio.loop();
 }
 
+void audio_eof_mp3(const char *info) {
+  if (trackCount > 0 ) {
+    currentTrack = (currentTrack + 1) % trackCount; // loop back to the first track after the last one
+    audio.connecttoSD(tracks[currentTrack].c_str());  // start playing the next track
+  }
+}
 // void audio_info(const char *info) {
 //   Serial.print("info        "); 
 //   Serial.println(info);
