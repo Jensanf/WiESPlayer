@@ -20,13 +20,13 @@
 #define I2S_LRC       26
 
 // Defines
-#define EEPROM_SIZE 512
+#define EEPROM_SIZE 256
 #define GLOABAL_SSID_ADDR 0
 #define GLOABAL_PASSWORD_ADDR 100
 #define MAX_ATTEMPTS 20            // How many repeates do WIFi connection
 #define SPI_FREQ 10000000
 
-#define MAX_TRACKS 1000
+#define MAX_TRACKS 100
 String tracks[MAX_TRACKS];
 int trackCount = 0;
 int currentTrack = 0;
@@ -35,11 +35,11 @@ int currentTrack = 0;
 const char* AP_SSID = "ESP32";
 const char* AP_PASSWORD = "12345678";
 const char* HOSTNAME = "esp32";
-const char* serverIndex = "<form method='POST' action='/update' enctype='multipart/form-data'>"
-                          "<input type='file' name='update'><input type='submit' value='Update'></form>";
 
 // Global variables
 int currentVolume = 5; // Starting volume of audio player
+bool flagNextSong = false; 
+bool flagPrevSong = false; 
 
 // Server
 AsyncWebServer server(80);
@@ -50,11 +50,14 @@ HTTPClient httpClient;
 
 // Function prototypes
 void createWiFi_AP(void);
-void configOTA(void);
 bool connectToGlobalWiFi(const char* ssid, const char* password);
 String readStringEEPROM(int addr);
 void writeStringEEPROM(int addr, String data);
 bool isMusicFile(String fileName);
+void configOTAPage(void);
+void configGlobalWiFiPage(void);
+void configMainPage(void);
+void configPlaylistPage(void);
 
 void setup() {
   pinMode(SD_CS, OUTPUT);      
@@ -73,8 +76,10 @@ void setup() {
   }
   MDNS.begin(HOSTNAME);
   
-  configOTA();
-  configWiFiLoginData(GLOABAL_SSID_ADDR, GLOABAL_PASSWORD_ADDR);
+  configOTAPage();
+  configGlobalWiFiPage(GLOABAL_SSID_ADDR, GLOABAL_PASSWORD_ADDR);
+  configMainPage(); 
+  configPlaylistPage();
   server.begin();
   
   MDNS.addService("http", "tcp", 80);
@@ -92,6 +97,16 @@ void setup() {
 }
 
 void loop() {
+  if (flagNextSong) {
+    currentTrack = (currentTrack + 1) % trackCount;
+    audio.connecttoSD(tracks[currentTrack].c_str());
+    flagNextSong = false; 
+  }
+  if (flagPrevSong){
+    currentTrack = (currentTrack - 1 + trackCount) % trackCount;
+    audio.connecttoSD(tracks[currentTrack].c_str());
+    flagPrevSong = false; 
+  }
   audio.loop();
 }
 
@@ -129,9 +144,12 @@ void createWiFi_AP() {
   WiFi.softAP(AP_SSID, AP_PASSWORD);
 }
 
-void configOTA() {
+const char* update_page = "<form method='POST' action='/update' enctype='multipart/form-data'>"
+                          "<input type='file' name='update'><input type='submit' value='Update'></form>";
+
+void configOTAPage() {
   server.on("/update", HTTP_GET, [](AsyncWebServerRequest *request) {
-    request->send(200, "text/html", serverIndex);
+    request->send(200, "text/html", update_page);
     audio.pauseResume();  // Mute audio here before starting the update
   });
 
@@ -159,7 +177,7 @@ void configOTA() {
   });
 }
 
-void configWiFiLoginData (int ssid_addr, int pass_addr) {
+void configGlobalWiFiPage (int ssid_addr, int pass_addr) {
   server.on("/wifi", HTTP_GET, [](AsyncWebServerRequest *request){
     String s = "<html><body>";
     s += "<form method='post' action='/wifi'>";
@@ -181,6 +199,169 @@ void configWiFiLoginData (int ssid_addr, int pass_addr) {
       writeStringEEPROM(pass_addr, password);
     }
     ESP.restart();
+  });
+}
+const char* playlist_page PROGMEM = R"rawliteral(
+<a href="/">Home page</a><br/>
+<a href="/update">Update Firmware</a>
+<form id="upload_form" action="/upload" method="POST" enctype="multipart/form-data">
+    <input type="file" id="file" name="upload">
+    <input type="submit" value="Upload">
+</form>
+<div id="progress">Progress: 0%</div>
+<script>
+document.getElementById("upload_form").addEventListener("submit", function(event){
+    event.preventDefault();
+    var fileInput = document.getElementById("file");
+    var file = fileInput.files[0];
+    var formData = new FormData();
+    formData.append("upload", file);
+    
+    var xhr = new XMLHttpRequest();
+    xhr.open("POST", "/upload", true);
+    
+    xhr.upload.onprogress = function(event) {
+        if(event.lengthComputable) {
+            var progress = Math.round((event.loaded / event.total) * 100);
+            document.getElementById("progress").innerHTML = "Progress: " + progress + "%";
+        }
+    };
+    
+    xhr.send(formData);
+});
+</script>
+)rawliteral";
+
+
+void listDir(File dir, String& fileList) {
+  while (true) {
+    File entry =  dir.openNextFile();
+    if (! entry) {
+      // no more files
+      break;
+    }
+    if (isMusicFile(entry.name())) {
+      fileList += entry.name();
+      fileList += " <a href=\"/delete?file=";
+      fileList += entry.name();
+      fileList += "\">Remove</a><br>";
+    }
+    entry.close();
+  }
+}
+void configPlaylistPage() {
+  // Receive and save the file on POST request
+  server.on("/upload", HTTP_POST, [](AsyncWebServerRequest *request) {
+    request->send(200); 
+  },[](AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
+      if(!index){
+        rootDirectory = SD.open("/" + filename, FILE_WRITE);
+      }
+      rootDirectory.write(data, len);
+      if(final){
+        if (isMusicFile(filename) && trackCount < MAX_TRACKS) {
+          tracks[trackCount++] = filename;
+        }
+        rootDirectory.close();
+      }
+  });
+  server.on("/playlist", HTTP_GET, [](AsyncWebServerRequest *request){
+    String fileList = "<html><body>";
+    File root = SD.open("/");
+    listDir(root, fileList);
+    String completePage = String(playlist_page) + "<br/>" + fileList + "</body></html>";
+    request->send(200, "text/html", completePage);
+  });
+  // Remove file
+  server.on("/delete", HTTP_GET, [](AsyncWebServerRequest *request) {
+    if(request->hasParam("file")) {
+      String filename = request->getParam("file")->value();
+      if(SD.remove("/" + filename)) {
+        request->send(200, "text/plain", "File deleted");
+      } else {
+        request->send(500, "text/plain", "Delete failed");
+      }
+    } else {
+      request->send(400, "text/plain", "Bad request");
+    }
+  });
+}
+
+const char main_page[] PROGMEM = R"rawliteral(
+<!DOCTYPE HTML><html>
+<body>
+<button id="prevSongButton" type="button">PrevSong</button>
+<button id="playStopButton" type="button">Play/Stop</button>
+<button id="nextSongButton" type="button">NextSong</button>
+<br/> 
+<label id="volumeLabel1" style="margin-right: 20px;">Volume: 10</label>
+<input type="range" min="0" max="21" value="10" id="volumeSlider1">
+<br/>
+<a href="/playlist">Playlist</a>
+<br/>
+<a href="/update">Update Firmware</a>
+<script>
+document.getElementById("prevSongButton").addEventListener("click", function(){
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/prev_song", true);
+    xhr.send();
+});
+
+document.getElementById("playStopButton").addEventListener("click", function(){
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/play_stop", true);
+    xhr.send();
+});
+
+document.getElementById("nextSongButton").addEventListener("click", function(){
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/next_song", true);
+    xhr.send();
+});
+
+document.getElementById("volumeSlider1").addEventListener("input", function(){
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/set_volume1?volume=" + this.value, true);
+    xhr.send();
+    document.getElementById("volumeLabel1").innerHTML = "Volume: " + this.value;
+});
+
+</script>
+</body>
+</html>
+)rawliteral";
+
+void configMainPage() {
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send_P(200, "text/html", main_page);
+  });
+    // Set the flag when the NextSong button is pressed
+  server.on("/next_song", HTTP_GET, [](AsyncWebServerRequest *request){
+    flagNextSong = true;
+    request->send(200);
+  });
+
+    // Set the flag when the PrevSong button is pressed
+  server.on("/prev_song", HTTP_GET, [](AsyncWebServerRequest *request){
+    flagPrevSong = true;
+    request->send(200);
+  });
+
+  // Toggle the state when the Play/Stop button is pressed
+  server.on("/play_stop", HTTP_GET, [](AsyncWebServerRequest *request){
+      audio.pauseResume();
+      request->send(200);
+  });
+
+  // Adjust volume when the volume slider changes
+  server.on("/set_volume1", HTTP_GET, [](AsyncWebServerRequest *request){
+      if(request->hasParam("volume")) {
+          currentVolume = request->getParam("volume")->value().toInt();
+          audio.setVolume(currentVolume);
+          request->send(200);
+      } else {
+          request->send(400, "text/plain", "Bad request");
+      }
   });
 }
 
