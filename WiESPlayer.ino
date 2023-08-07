@@ -9,6 +9,7 @@
 #include "SPI.h"
 #include "SD.h"
 #include "FS.h"
+#include "RTClib.h"
 
 // Digital I/O used
 #define SD_CS          5
@@ -41,12 +42,21 @@ int currentVolume = 5; // Starting volume of audio player
 bool flagNextSong = false; 
 bool flagPrevSong = false; 
 
+// Player modes
+bool flagModeAlarm = false; 
+
+// Alarm time
+int alarmHour = 0;
+int alarmMinute = 0;
+
 // Server
 AsyncWebServer server(80);
 
 Audio audio;
 File rootDirectory;
 HTTPClient httpClient;
+RTC_DS3231 rtc;
+DateTime now;
 
 // Function prototypes
 void createWiFi_AP(void);
@@ -58,8 +68,10 @@ void configOTAPage(void);
 void configGlobalWiFiPage(void);
 void configMainPage(void);
 void configPlaylistPage(void);
+void configClockPage(void); 
 
 void setup() {
+  rtc.begin();
   pinMode(SD_CS, OUTPUT);      
   digitalWrite(SD_CS, HIGH);
   SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
@@ -80,6 +92,7 @@ void setup() {
   configGlobalWiFiPage(GLOABAL_SSID_ADDR, GLOABAL_PASSWORD_ADDR);
   configMainPage(); 
   configPlaylistPage();
+  configClockPage();
   server.begin();
   
   MDNS.addService("http", "tcp", 80);
@@ -97,6 +110,12 @@ void setup() {
 }
 
 void loop() {
+    DateTime now = rtc.now();
+  // Check if it's time to alarm
+  if(flagModeAlarm && now.hour() == alarmHour && now.minute() == alarmMinute){
+    audio.setVolume(15);
+    flagModeAlarm = false;
+  }
   if (flagNextSong) {
     currentTrack = (currentTrack + 1) % trackCount;
     audio.connecttoSD(tracks[currentTrack].c_str());
@@ -297,8 +316,9 @@ const char main_page[] PROGMEM = R"rawliteral(
 <label id="volumeLabel1" style="margin-right: 20px;">Volume: 10</label>
 <input type="range" min="0" max="21" value="10" id="volumeSlider1">
 <br/>
-<a href="/playlist">Playlist</a>
-<br/>
+<a href="/playlist">Playlist</a><br/>
+<a href="/time">Time and Alarm</a><br/>
+<a href="/wifi">Wi-Fi settings</a><br/>
 <a href="/update">Update Firmware</a>
 <script>
 document.getElementById("prevSongButton").addEventListener("click", function(){
@@ -363,6 +383,117 @@ void configMainPage() {
           request->send(400, "text/plain", "Bad request");
       }
   });
+}
+const char* clock_page PROGMEM = R"rawliteral(
+<!DOCTYPE HTML>
+<html>
+<body>
+  <h3>Current Time: <span id="currentTime"></span></h3>
+  <h3>Alarm Time: <span id="alarmTime"></span></h3>
+  <button id="activAlarm" type="button">Alarm On/Off</button>
+  <h4>Set Alarm</h4>
+  <form action="/setAlarm">
+    <input type="text" name="alarmHour" placeholder="Hour" style="width: 40px;">
+    <input type="text" name="alarmMinute" placeholder="Minute" style="width: 40px;">
+    <input type="submit" value="Set Alarm">
+  </form>
+
+  <h4>Set Time</h4>
+  <form action="/setTime">
+    <input type="text" name="hour" placeholder="Hour" style="width: 40px;">
+    <input type="text" name="minute" placeholder="Minute" style="width: 40px;">
+    <input type="text" name="second" placeholder="Second" style="width: 50px;">
+    <input type="submit" value="Set Time">
+  </form> 
+
+  <script>
+    document.getElementById("activAlarm").addEventListener("click", function(){
+      var xhr = new XMLHttpRequest();
+      xhr.open("GET", "/activAlarm", true);
+      xhr.send();
+    });
+
+    function updateTime() {
+      fetch('/getTime')
+        .then(response => response.text())
+        .then(data => {
+          document.getElementById('currentTime').textContent = data;
+        });
+    }
+    function updateAlarm() {
+      fetch('/getAlarm')
+        .then(response => response.text())
+        .then(data => {
+          document.getElementById('alarmTime').textContent = data;
+        });
+    }
+    
+    // Update the time immediately, and then every second
+    updateTime();
+    setInterval(updateTime, 60000);
+    updateAlarm(); 
+  </script>
+
+</body>
+</html>
+)rawliteral"; 
+
+void configClockPage(){
+  // Serve the HTML
+  server.on("/time", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send_P(200, "text/html", clock_page);
+  });
+    // Toggle the state when the Play/Stop button is pressed
+  server.on("/activAlarm", HTTP_GET, [](AsyncWebServerRequest *request){
+      flagModeAlarm = (flagModeAlarm) ? false: true; 
+      request->send(200);
+  });
+// Handle setting the time
+server.on("/setTime", HTTP_GET, [] (AsyncWebServerRequest *request) {
+  int hour, minute, second;
+  int params = request->params();
+  for(int i=0;i<params;i++){
+    AsyncWebParameter* p = request->getParam(i);
+    if(p->name()=="hour"){
+      hour = p->value().toInt();
+    }
+    if(p->name()=="minute"){
+      minute = p->value().toInt();
+    }
+    if(p->name()=="second"){
+      second = p->value().toInt();
+    }
+  }
+  DateTime newTime = DateTime(now.year(), now.month(), now.day(), hour, minute, second);
+  rtc.adjust(newTime);
+  request->send(200, "text/plain", "OK");
+});
+
+  // Handle setting the alarm
+  server.on("/setAlarm", HTTP_GET, [] (AsyncWebServerRequest *request) {
+    int params = request->params();
+    for(int i=0;i<params;i++){
+      AsyncWebParameter* p = request->getParam(i);
+      if(p->name()=="alarmHour"){
+        alarmHour = p->value().toInt();
+      }
+      if(p->name()=="alarmMinute"){
+        alarmMinute = p->value().toInt();
+      }
+    }
+    flagModeAlarm = true;
+    request->send(200, "text/plain", "OK");
+  });
+  server.on("/getTime", HTTP_GET, [] (AsyncWebServerRequest *request) {
+  DateTime now = rtc.now();
+  String currentTime = String(now.hour()) + ":" + String(now.minute());
+  request->send(200, "text/plain", currentTime);
+  });
+  server.on("/getAlarm", HTTP_GET, [] (AsyncWebServerRequest *request) {
+    String alarmTime = String(alarmHour) + ":" + String(alarmMinute);
+    request->send(200, "text/plain", alarmTime);
+  });
+
 }
 
 /* Function to write in EEPROM string data */ 
