@@ -71,6 +71,7 @@ void configPlaylistPage(void);
 void configClockPage(void); 
 
 void setup() {
+  randomSeed(analogRead(0));
   rtc.begin();
   pinMode(SD_CS, OUTPUT);      
   digitalWrite(SD_CS, HIGH);
@@ -106,7 +107,7 @@ void setup() {
     }
     file = rootDirectory.openNextFile();
   }
-  audio.connecttoSD(tracks[currentTrack].c_str());
+  audio.connecttoSD(tracks[random(0, trackCount)].c_str());
 }
 
 void loop() {
@@ -297,6 +298,17 @@ void configPlaylistPage() {
       String filename = request->getParam("file")->value();
       if(SD.remove("/" + filename)) {
         request->send(200, "text/plain", "File deleted");
+        int i = 0;
+        while (i < trackCount) {
+            if (tracks[i] == filename) {
+                for (int j = i; j < trackCount - 1; j++) {
+                    tracks[j] = tracks[j + 1];
+                }
+                trackCount--;
+            } else {
+                i++;
+            }
+        }
       } else {
         request->send(500, "text/plain", "Delete failed");
       }
@@ -306,46 +318,56 @@ void configPlaylistPage() {
   });
 }
 
-const char main_page[] PROGMEM = R"rawliteral(
+const char main_page_start[] PROGMEM= R"rawliteral(
 <!DOCTYPE HTML><html>
 <body>
+<h4>Now Playing: <span id="currentTrack"></span></h4>
 <button id="prevSongButton" type="button">PrevSong</button>
 <button id="playStopButton" type="button">Play/Stop</button>
 <button id="nextSongButton" type="button">NextSong</button>
 <br/> 
-<label id="volumeLabel1" style="margin-right: 20px;">Volume: 10</label>
-<input type="range" min="0" max="21" value="10" id="volumeSlider1">
+<label id="volumeLabel1">Volume:)rawliteral";
+
+const char main_page_end[] PROGMEM= R"rawliteral(" id="volumeSlider1">
 <br/>
 <a href="/playlist">Playlist</a><br/>
 <a href="/time">Time and Alarm</a><br/>
 <a href="/wifi">Wi-Fi settings</a><br/>
 <a href="/update">Update Firmware</a>
 <script>
-document.getElementById("prevSongButton").addEventListener("click", function(){
-    var xhr = new XMLHttpRequest();
-    xhr.open("GET", "/prev_song", true);
-    xhr.send();
-});
+  function updateTrack() {
+    fetch('/currentTrack')
+      .then(response => response.text())
+      .then(data => {
+        document.getElementById('currentTrack').textContent = data;
+      });
+  }
+  document.getElementById("prevSongButton").addEventListener("click", function(){
+      var xhr = new XMLHttpRequest();
+      xhr.open("GET", "/prev_song", true);
+      xhr.send();
+  });
 
-document.getElementById("playStopButton").addEventListener("click", function(){
-    var xhr = new XMLHttpRequest();
-    xhr.open("GET", "/play_stop", true);
-    xhr.send();
-});
+  document.getElementById("playStopButton").addEventListener("click", function(){
+      var xhr = new XMLHttpRequest();
+      xhr.open("GET", "/play_stop", true);
+      xhr.send();
+  });
 
-document.getElementById("nextSongButton").addEventListener("click", function(){
-    var xhr = new XMLHttpRequest();
-    xhr.open("GET", "/next_song", true);
-    xhr.send();
-});
+  document.getElementById("nextSongButton").addEventListener("click", function(){
+      var xhr = new XMLHttpRequest();
+      xhr.open("GET", "/next_song", true);
+      xhr.send();
+  });
 
-document.getElementById("volumeSlider1").addEventListener("input", function(){
-    var xhr = new XMLHttpRequest();
-    xhr.open("GET", "/set_volume1?volume=" + this.value, true);
-    xhr.send();
-    document.getElementById("volumeLabel1").innerHTML = "Volume: " + this.value;
-});
-
+  document.getElementById("volumeSlider1").addEventListener("input", function(){
+      var xhr = new XMLHttpRequest();
+      xhr.open("GET", "/set_volume1?volume=" + this.value, true);
+      xhr.send();
+      document.getElementById("volumeLabel1").innerHTML = "Volume: " + this.value;
+  });
+  updateTrack();
+  setInterval(updateTrack, 2000);
 </script>
 </body>
 </html>
@@ -353,7 +375,15 @@ document.getElementById("volumeSlider1").addEventListener("input", function(){
 
 void configMainPage() {
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send_P(200, "text/html", main_page);
+    String main_page = FPSTR(main_page_start);   // start the HTML
+    main_page += String(currentVolume);  
+    main_page += R"rawliteral(</label> <input type="range" min="0" max="21" value=")rawliteral";
+    main_page += String(currentVolume);  
+    main_page += FPSTR(main_page_end);           // finish the HTML
+    request->send(200, "text/html", main_page);
+  });
+  server.on("/currentTrack", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send(200, "text/plain", tracks[currentTrack]);
   });
     // Set the flag when the NextSong button is pressed
   server.on("/next_song", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -474,10 +504,10 @@ server.on("/setTime", HTTP_GET, [] (AsyncWebServerRequest *request) {
     int params = request->params();
     for(int i=0;i<params;i++){
       AsyncWebParameter* p = request->getParam(i);
-      if(p->name()=="alarmHour"){
+      if(p->name()=="alarmHour") {
         alarmHour = p->value().toInt();
       }
-      if(p->name()=="alarmMinute"){
+      if(p->name()=="alarmMinute") {
         alarmMinute = p->value().toInt();
       }
     }
