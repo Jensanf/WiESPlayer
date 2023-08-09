@@ -122,7 +122,7 @@ void setup() {
 void loop() {
     DateTime now = rtc.now();
   // Check if it's time to alarm
-  if(flagModeAlarm && now.hour() == alarmHour && now.minute() == alarmMinute){
+  if (flagModeAlarm && now.hour() == alarmHour && now.minute() == alarmMinute) {
     audio.setVolume(15);
     flagModeAlarm = false;
   }
@@ -173,7 +173,8 @@ void createWiFi_AP() {
   WiFi.softAP(AP_SSID, AP_PASSWORD);
 }
 
-const char* update_page = "<form method='POST' action='/update' enctype='multipart/form-data'>"
+const char* update_page = "<a href='/' style='margin-bottom: 20px; display: block;'>Home page</a>"
+                          "<form method='POST' action='/update' enctype='multipart/form-data'>"
                           "<input type='file' name='update'><input type='submit' value='Update'></form>";
 
 void configOTAPage() {
@@ -209,6 +210,7 @@ void configOTAPage() {
 void configGlobalWiFiPage (int ssid_addr, int pass_addr) {
   server.on("/wifi", HTTP_GET, [](AsyncWebServerRequest *request){
     String s = "<html><body>";
+    s += "<a href='/' style='margin-bottom: 20px; display: block;'>Home page</a>";
     s += "<form method='post' action='/wifi'>";
     s += "SSID:<br><input type='text' name='ssid'><br>";
     s += "Password:<br><input type='text' name='password'><br>";
@@ -231,8 +233,7 @@ void configGlobalWiFiPage (int ssid_addr, int pass_addr) {
   });
 }
 const char* playlist_page PROGMEM = R"rawliteral(
-<a href="/">Home page</a><br/>
-<a href="/update">Update Firmware</a>
+<a href='/' style='margin-bottom: 20px; display: block;'>Home page</a>
 <form id="upload_form" action="/upload" method="POST" enctype="multipart/form-data">
     <input type="file" id="file" name="upload">
     <input type="submit" value="Upload">
@@ -337,7 +338,7 @@ void configPlaylistPage() {
 const char main_page_start[] PROGMEM= R"rawliteral(
 <!DOCTYPE HTML><html>
 <body>
-<h4>Now Playing: <span id="currentTrack"></span></h4>
+<b>Now Playing: <span id="currentTrack"></span></b><br/><br/>
 <button id="prevSongButton" type="button">PrevSong</button>
 <button id="playStopButton" type="button">Play/Stop</button>
 <button id="nextSongButton" type="button">NextSong</button> <br/><br/> 
@@ -441,16 +442,17 @@ const char* clock_page PROGMEM = R"rawliteral(
 <!DOCTYPE HTML>
 <html>
 <body>
-  <h3>Current Time: <span id="currentTime"></span></h3>
-  <h3>Alarm Time: <span id="alarmTime"></span></h3>
-  <h4>Set Alarm</h4>
+  <a href='/' style='margin-bottom: 20px; display: block;'>Home page</a>
+  <b>Current Time: <span id="currentTime"></span></b><br/>
+  <b>Alarm Time: <span id="alarmTime"></span></b><br/>
+  <b>Set Alarm</b>
   <form action="/setAlarm">
     <input type="text" name="alarmHour" placeholder="Hour" style="width: 40px;">
     <input type="text" name="alarmMinute" placeholder="Minute" style="width: 40px;">
     <input type="submit" value="Set Alarm">
   </form>
 
-  <h4>Set Time</h4>
+  <b>Set Time</b>
   <form action="/setTime">
     <input type="text" name="hour" placeholder="Hour" style="width: 40px;">
     <input type="text" name="minute" placeholder="Minute" style="width: 40px;">
