@@ -24,6 +24,10 @@
 #define EEPROM_SIZE 256
 #define GLOABAL_SSID_ADDR 0
 #define GLOABAL_PASSWORD_ADDR 100
+#define VOLUME_ADDR 200
+#define ALARM_HOUR_ADDR 201
+#define ALARM_MIN_ADDR 202
+#define ALARM_FLAG_ADDR 203
 #define MAX_ATTEMPTS 20            // How many repeates do WIFi connection
 #define SPI_FREQ 10000000
 
@@ -83,6 +87,10 @@ void setup() {
   while (!SD.begin(SD_CS));
 
   EEPROM.begin(EEPROM_SIZE);
+  currentVolume = EEPROM.read(VOLUME_ADDR);
+  alarmHour = EEPROM.read(ALARM_HOUR_ADDR);
+  alarmMinute = EEPROM.read(ALARM_MIN_ADDR);
+  flagModeAlarm = EEPROM.read(ALARM_FLAG_ADDR);
   if(!connectToGlobalWiFi(readStringEEPROM(GLOABAL_SSID_ADDR).c_str(), 
                           readStringEEPROM(GLOABAL_PASSWORD_ADDR).c_str())) {
     createWiFi_AP();
@@ -107,7 +115,8 @@ void setup() {
     }
     file = rootDirectory.openNextFile();
   }
-  audio.connecttoSD(tracks[random(0, trackCount)].c_str());
+  currentTrack = esp_random() % trackCount; // random(0, trackCount);
+  audio.connecttoSD(tracks[currentTrack].c_str());
 }
 
 void loop() {
@@ -246,7 +255,11 @@ document.getElementById("upload_form").addEventListener("submit", function(event
             document.getElementById("progress").innerHTML = "Progress: " + progress + "%";
         }
     };
-    
+    xhr.onload = function() {
+        if (this.status == 200 && this.responseText == "refresh") {
+            location.reload();  
+        }
+    };
     xhr.send(formData);
 });
 </script>
@@ -275,13 +288,16 @@ void configPlaylistPage() {
     request->send(200); 
   },[](AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
       if(!index){
+        audio.pauseResume();
         rootDirectory = SD.open("/" + filename, FILE_WRITE);
       }
       rootDirectory.write(data, len);
       if(final){
         if (isMusicFile(filename) && trackCount < MAX_TRACKS) {
           tracks[trackCount++] = filename;
+          audio.pauseResume();
         }
+        request->send(200, "text/plain", "refresh"); 
         rootDirectory.close();
       }
   });
@@ -298,7 +314,7 @@ void configPlaylistPage() {
       String filename = request->getParam("file")->value();
       if(SD.remove("/" + filename)) {
         request->send(200, "text/plain", "File deleted");
-        int i = 0;
+        int i = 0; // Delete file from tracklist and move other track to fill the empty number.
         while (i < trackCount) {
             if (tracks[i] == filename) {
                 for (int j = i; j < trackCount - 1; j++) {
@@ -324,12 +340,10 @@ const char main_page_start[] PROGMEM= R"rawliteral(
 <h4>Now Playing: <span id="currentTrack"></span></h4>
 <button id="prevSongButton" type="button">PrevSong</button>
 <button id="playStopButton" type="button">Play/Stop</button>
-<button id="nextSongButton" type="button">NextSong</button>
-<br/> 
-<label id="volumeLabel1">Volume:)rawliteral";
+<button id="nextSongButton" type="button">NextSong</button> <br/><br/> 
+)rawliteral";
 
-const char main_page_end[] PROGMEM= R"rawliteral(" id="volumeSlider1">
-<br/>
+const char main_page_end[] PROGMEM= R"rawliteral(
 <a href="/playlist">Playlist</a><br/>
 <a href="/time">Time and Alarm</a><br/>
 <a href="/wifi">Wi-Fi settings</a><br/>
@@ -376,9 +390,11 @@ const char main_page_end[] PROGMEM= R"rawliteral(" id="volumeSlider1">
 void configMainPage() {
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
     String main_page = FPSTR(main_page_start);   // start the HTML
-    main_page += String(currentVolume);  
-    main_page += R"rawliteral(</label> <input type="range" min="0" max="21" value=")rawliteral";
-    main_page += String(currentVolume);  
+    main_page += R"rawliteral(<label id="volumeLabel1">Volume:)rawliteral" + String(currentVolume) + "</label> <br/> ";
+    main_page += R"rawliteral(<input type="range" min="0" max="21" value=")rawliteral" + String(currentVolume) + R"rawliteral(" id="volumeSlider1">)rawliteral"; 
+    if (flagModeAlarm) {
+      main_page += "<p> Alarm is set: " + String(alarmHour) + ":" + String(alarmMinute) + "</p>";
+    } 
     main_page += FPSTR(main_page_end);           // finish the HTML
     request->send(200, "text/html", main_page);
   });
@@ -408,11 +424,18 @@ void configMainPage() {
       if(request->hasParam("volume")) {
           currentVolume = request->getParam("volume")->value().toInt();
           audio.setVolume(currentVolume);
+          EEPROM.write(VOLUME_ADDR, currentVolume);
+          EEPROM.commit();
           request->send(200);
       } else {
           request->send(400, "text/plain", "Bad request");
       }
   });
+  // // Toggle the state when the Play/Stop button is pressed
+  // server.on("/activAlarm", HTTP_GET, [](AsyncWebServerRequest *request){
+  //     flagModeAlarm = (flagModeAlarm) ? false: true; 
+  //     request->send(200);
+  // });
 }
 const char* clock_page PROGMEM = R"rawliteral(
 <!DOCTYPE HTML>
@@ -420,7 +443,6 @@ const char* clock_page PROGMEM = R"rawliteral(
 <body>
   <h3>Current Time: <span id="currentTime"></span></h3>
   <h3>Alarm Time: <span id="alarmTime"></span></h3>
-  <button id="activAlarm" type="button">Alarm On/Off</button>
   <h4>Set Alarm</h4>
   <form action="/setAlarm">
     <input type="text" name="alarmHour" placeholder="Hour" style="width: 40px;">
@@ -437,12 +459,6 @@ const char* clock_page PROGMEM = R"rawliteral(
   </form> 
 
   <script>
-    document.getElementById("activAlarm").addEventListener("click", function(){
-      var xhr = new XMLHttpRequest();
-      xhr.open("GET", "/activAlarm", true);
-      xhr.send();
-    });
-
     function updateTime() {
       fetch('/getTime')
         .then(response => response.text())
@@ -473,11 +489,6 @@ void configClockPage(){
   server.on("/time", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send_P(200, "text/html", clock_page);
   });
-    // Toggle the state when the Play/Stop button is pressed
-  server.on("/activAlarm", HTTP_GET, [](AsyncWebServerRequest *request){
-      flagModeAlarm = (flagModeAlarm) ? false: true; 
-      request->send(200);
-  });
 // Handle setting the time
 server.on("/setTime", HTTP_GET, [] (AsyncWebServerRequest *request) {
   int hour, minute, second;
@@ -506,12 +517,16 @@ server.on("/setTime", HTTP_GET, [] (AsyncWebServerRequest *request) {
       AsyncWebParameter* p = request->getParam(i);
       if(p->name()=="alarmHour") {
         alarmHour = p->value().toInt();
+        EEPROM.write(ALARM_HOUR_ADDR, alarmHour);
       }
       if(p->name()=="alarmMinute") {
         alarmMinute = p->value().toInt();
+        EEPROM.write(ALARM_MIN_ADDR, alarmMinute);
       }
     }
     flagModeAlarm = true;
+    EEPROM.write(ALARM_FLAG_ADDR, flagModeAlarm);
+    EEPROM.commit();
     request->send(200, "text/plain", "OK");
   });
   server.on("/getTime", HTTP_GET, [] (AsyncWebServerRequest *request) {
