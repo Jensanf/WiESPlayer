@@ -30,6 +30,7 @@
 #define ALARM_FLAG_ADDR 203
 #define MAX_ATTEMPTS 20            // How many repeates do WIFi connection
 #define SPI_FREQ 10000000
+#define PERIOD_CHECK_ALARM_TIME 1000
 
 #define MAX_TRACKS 100
 String tracks[MAX_TRACKS];
@@ -47,12 +48,12 @@ bool flagNextSong = false;
 bool flagPrevSong = false; 
 
 // Player modes
-bool flagModeAlarm = false; 
+bool flagModeAlarm = false;
 
 // Alarm time
 int alarmHour = 0;
 int alarmMinute = 0;
-
+unsigned long long checkTime = 0; 
 // Server
 AsyncWebServer server(80);
 
@@ -72,10 +73,10 @@ void configOTAPage(void);
 void configGlobalWiFiPage(void);
 void configMainPage(void);
 void configPlaylistPage(void);
-void configClockPage(void); 
+void configClockPage(void);
+void deleteTrack(String tracksList[], int &trackCount, const String &trackName); 
 
 void setup() {
-  randomSeed(analogRead(0));
   rtc.begin();
   pinMode(SD_CS, OUTPUT);      
   digitalWrite(SD_CS, HIGH);
@@ -91,6 +92,12 @@ void setup() {
   alarmHour = EEPROM.read(ALARM_HOUR_ADDR);
   alarmMinute = EEPROM.read(ALARM_MIN_ADDR);
   flagModeAlarm = EEPROM.read(ALARM_FLAG_ADDR);
+
+  currentVolume = (currentVolume > 21 || currentVolume < 0) ? 5 : currentVolume;
+  alarmHour = (alarmHour > 24 || alarmHour < 0) ? 0 : alarmHour;
+  alarmMinute = (alarmMinute > 59 || alarmMinute < 0) ? 0 : alarmMinute;
+  flagModeAlarm = (flagModeAlarm > 1 || flagModeAlarm < 0) ? 0 : flagModeAlarm;
+
   if(!connectToGlobalWiFi(readStringEEPROM(GLOABAL_SSID_ADDR).c_str(), 
                           readStringEEPROM(GLOABAL_PASSWORD_ADDR).c_str())) {
     createWiFi_AP();
@@ -120,7 +127,10 @@ void setup() {
 }
 
 void loop() {
+  if (millis() - checkTime > PERIOD_CHECK_ALARM_TIME) {
+    checkTime = millis(); 
     DateTime now = rtc.now();
+  }
   // Check if it's time to alarm
   if (flagModeAlarm && now.hour() == alarmHour && now.minute() == alarmMinute) {
     audio.setVolume(15);
@@ -315,17 +325,7 @@ void configPlaylistPage() {
       String filename = request->getParam("file")->value();
       if(SD.remove("/" + filename)) {
         request->send(200, "text/plain", "File deleted");
-        int i = 0; // Delete file from tracklist and move other track to fill the empty number.
-        while (i < trackCount) {
-            if (tracks[i] == filename) {
-                for (int j = i; j < trackCount - 1; j++) {
-                    tracks[j] = tracks[j + 1];
-                }
-                trackCount--;
-            } else {
-                i++;
-            }
-        }
+        deleteTrack(tracks, trackCount, filename);
       } else {
         request->send(500, "text/plain", "Delete failed");
       }
@@ -432,11 +432,6 @@ void configMainPage() {
           request->send(400, "text/plain", "Bad request");
       }
   });
-  // // Toggle the state when the Play/Stop button is pressed
-  // server.on("/activAlarm", HTTP_GET, [](AsyncWebServerRequest *request){
-  //     flagModeAlarm = (flagModeAlarm) ? false: true; 
-  //     request->send(200);
-  // });
 }
 const char* clock_page PROGMEM = R"rawliteral(
 <!DOCTYPE HTML>
@@ -560,4 +555,18 @@ String readStringEEPROM(int addr) {
     data = data + (char)EEPROM.read(addr + 1 + i);
   }
   return data;
+}
+
+void deleteTrack(String tracksList[], int &trackCount, const String &trackName) {
+    int i = 0;
+    while (i < trackCount) {
+        if (tracksList[i] == trackName) {
+            for (int j = i; j < trackCount - 1; j++) {
+                tracksList[j] = tracksList[j + 1];
+            }
+            trackCount--;
+        } else {
+            i++;
+        }
+    }
 }
