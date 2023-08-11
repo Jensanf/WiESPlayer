@@ -24,6 +24,10 @@
 #define EEPROM_SIZE 256
 #define GLOABAL_SSID_ADDR 0
 #define GLOABAL_PASSWORD_ADDR 100
+#define VOLUME_ADDR 200
+#define ALARM_HOUR_ADDR 201
+#define ALARM_MIN_ADDR 202
+#define ALARM_FLAG_ADDR 203
 #define MAX_ATTEMPTS 20            // How many repeates do WIFi connection
 #define SPI_FREQ 10000000
 
@@ -43,12 +47,11 @@ bool flagNextSong = false;
 bool flagPrevSong = false; 
 
 // Player modes
-bool flagModeAlarm = false; 
+bool flagModeAlarm = false;
 
 // Alarm time
 int alarmHour = 0;
 int alarmMinute = 0;
-
 // Server
 AsyncWebServer server(80);
 
@@ -68,10 +71,10 @@ void configOTAPage(void);
 void configGlobalWiFiPage(void);
 void configMainPage(void);
 void configPlaylistPage(void);
-void configClockPage(void); 
+void configClockPage(void);
+void deleteTrack(String tracksList[], int &trackCount, const String &trackName); 
 
 void setup() {
-  randomSeed(analogRead(0));
   rtc.begin();
   pinMode(SD_CS, OUTPUT);      
   digitalWrite(SD_CS, HIGH);
@@ -83,6 +86,16 @@ void setup() {
   while (!SD.begin(SD_CS));
 
   EEPROM.begin(EEPROM_SIZE);
+  currentVolume = EEPROM.read(VOLUME_ADDR);
+  alarmHour = EEPROM.read(ALARM_HOUR_ADDR);
+  alarmMinute = EEPROM.read(ALARM_MIN_ADDR);
+  flagModeAlarm = EEPROM.read(ALARM_FLAG_ADDR);
+
+  currentVolume = (currentVolume > 21 || currentVolume < 0) ? 5 : currentVolume;
+  alarmHour = (alarmHour > 24 || alarmHour < 0) ? 0 : alarmHour;
+  alarmMinute = (alarmMinute > 59 || alarmMinute < 0) ? 0 : alarmMinute;
+  flagModeAlarm = (flagModeAlarm > 1 || flagModeAlarm < 0) ? 0 : flagModeAlarm;
+
   if(!connectToGlobalWiFi(readStringEEPROM(GLOABAL_SSID_ADDR).c_str(), 
                           readStringEEPROM(GLOABAL_PASSWORD_ADDR).c_str())) {
     createWiFi_AP();
@@ -107,13 +120,14 @@ void setup() {
     }
     file = rootDirectory.openNextFile();
   }
-  audio.connecttoSD(tracks[random(0, trackCount)].c_str());
+  currentTrack = esp_random() % trackCount; // random(0, trackCount);
+  audio.connecttoSD(tracks[currentTrack].c_str());
 }
 
 void loop() {
-    DateTime now = rtc.now();
+  DateTime now = rtc.now();
   // Check if it's time to alarm
-  if(flagModeAlarm && now.hour() == alarmHour && now.minute() == alarmMinute){
+  if (flagModeAlarm && now.hour() == alarmHour && now.minute() == alarmMinute) {
     audio.setVolume(15);
     flagModeAlarm = false;
   }
@@ -130,12 +144,12 @@ void loop() {
   audio.loop();
 }
 
-void audio_eof_mp3(const char *info) {
-  if (trackCount > 0 ) {
-    currentTrack = (currentTrack + 1) % trackCount; // loop back to the first track after the last one
-    audio.connecttoSD(tracks[currentTrack].c_str());  // start playing the next track
-  }
-}
+// void audio_eof_mp3(const char *info) {
+//   if (trackCount > 0 ) {
+//     currentTrack = (currentTrack + 1) % trackCount; // loop back to the first track after the last one
+//     audio.connecttoSD(tracks[currentTrack].c_str());  // start playing the next track
+//   }
+// }
 // void audio_info(const char *info) {
 //   Serial.print("info        "); 
 //   Serial.println(info);
@@ -164,7 +178,8 @@ void createWiFi_AP() {
   WiFi.softAP(AP_SSID, AP_PASSWORD);
 }
 
-const char* update_page = "<form method='POST' action='/update' enctype='multipart/form-data'>"
+const char* update_page = "<a href='/' style='margin-bottom: 20px; display: block;'>Home page</a>"
+                          "<form method='POST' action='/update' enctype='multipart/form-data'>"
                           "<input type='file' name='update'><input type='submit' value='Update'></form>";
 
 void configOTAPage() {
@@ -200,6 +215,7 @@ void configOTAPage() {
 void configGlobalWiFiPage (int ssid_addr, int pass_addr) {
   server.on("/wifi", HTTP_GET, [](AsyncWebServerRequest *request){
     String s = "<html><body>";
+    s += "<a href='/' style='margin-bottom: 20px; display: block;'>Home page</a>";
     s += "<form method='post' action='/wifi'>";
     s += "SSID:<br><input type='text' name='ssid'><br>";
     s += "Password:<br><input type='text' name='password'><br>";
@@ -222,8 +238,7 @@ void configGlobalWiFiPage (int ssid_addr, int pass_addr) {
   });
 }
 const char* playlist_page PROGMEM = R"rawliteral(
-<a href="/">Home page</a><br/>
-<a href="/update">Update Firmware</a>
+<a href='/' style='margin-bottom: 20px; display: block;'>Home page</a>
 <form id="upload_form" action="/upload" method="POST" enctype="multipart/form-data">
     <input type="file" id="file" name="upload">
     <input type="submit" value="Upload">
@@ -246,7 +261,11 @@ document.getElementById("upload_form").addEventListener("submit", function(event
             document.getElementById("progress").innerHTML = "Progress: " + progress + "%";
         }
     };
-    
+    xhr.onload = function() {
+        if (this.status == 200 && this.responseText == "refresh") {
+            location.reload();  
+        }
+    };
     xhr.send(formData);
 });
 </script>
@@ -275,13 +294,16 @@ void configPlaylistPage() {
     request->send(200); 
   },[](AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
       if(!index){
+        audio.pauseResume();
         rootDirectory = SD.open("/" + filename, FILE_WRITE);
       }
       rootDirectory.write(data, len);
       if(final){
         if (isMusicFile(filename) && trackCount < MAX_TRACKS) {
           tracks[trackCount++] = filename;
+          audio.pauseResume();
         }
+        request->send(200, "text/plain", "refresh"); 
         rootDirectory.close();
       }
   });
@@ -298,17 +320,7 @@ void configPlaylistPage() {
       String filename = request->getParam("file")->value();
       if(SD.remove("/" + filename)) {
         request->send(200, "text/plain", "File deleted");
-        int i = 0;
-        while (i < trackCount) {
-            if (tracks[i] == filename) {
-                for (int j = i; j < trackCount - 1; j++) {
-                    tracks[j] = tracks[j + 1];
-                }
-                trackCount--;
-            } else {
-                i++;
-            }
-        }
+        deleteTrack(tracks, trackCount, filename);
       } else {
         request->send(500, "text/plain", "Delete failed");
       }
@@ -321,14 +333,13 @@ void configPlaylistPage() {
 const char main_page_start[] PROGMEM= R"rawliteral(
 <!DOCTYPE HTML><html>
 <body>
-<h4>Now Playing: <span id="currentTrack"></span></h4>
+<b>Now Playing: <span id="currentTrack"></span></b><br/><br/>
 <button id="prevSongButton" type="button">PrevSong</button>
 <button id="playStopButton" type="button">Play/Stop</button>
-<button id="nextSongButton" type="button">NextSong</button>
-<br/> 
-<label id="volumeLabel1">Volume:)rawliteral";
+<button id="nextSongButton" type="button">NextSong</button> <br/><br/> 
+)rawliteral";
 
-const char main_page_end[] PROGMEM= R"rawliteral(" id="volumeSlider1">
+const char main_page_end[] PROGMEM= R"rawliteral(
 <br/>
 <a href="/playlist">Playlist</a><br/>
 <a href="/time">Time and Alarm</a><br/>
@@ -376,9 +387,9 @@ const char main_page_end[] PROGMEM= R"rawliteral(" id="volumeSlider1">
 void configMainPage() {
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
     String main_page = FPSTR(main_page_start);   // start the HTML
-    main_page += String(currentVolume);  
-    main_page += R"rawliteral(</label> <input type="range" min="0" max="21" value=")rawliteral";
-    main_page += String(currentVolume);  
+    main_page += R"rawliteral(<label id="volumeLabel1">Volume:)rawliteral" + String(currentVolume) + "</label> <br/> ";
+    main_page += R"rawliteral(<input type="range" min="0" max="21" value=")rawliteral" + String(currentVolume) + R"rawliteral(" id="volumeSlider1">)rawliteral"; 
+    main_page += "<p> Alarm is set: " + String(alarmHour) + ":" + fineStrMinute(alarmMinute) + "</p>";
     main_page += FPSTR(main_page_end);           // finish the HTML
     request->send(200, "text/html", main_page);
   });
@@ -408,6 +419,8 @@ void configMainPage() {
       if(request->hasParam("volume")) {
           currentVolume = request->getParam("volume")->value().toInt();
           audio.setVolume(currentVolume);
+          EEPROM.write(VOLUME_ADDR, currentVolume);
+          EEPROM.commit();
           request->send(200);
       } else {
           request->send(400, "text/plain", "Bad request");
@@ -418,17 +431,17 @@ const char* clock_page PROGMEM = R"rawliteral(
 <!DOCTYPE HTML>
 <html>
 <body>
-  <h3>Current Time: <span id="currentTime"></span></h3>
-  <h3>Alarm Time: <span id="alarmTime"></span></h3>
-  <button id="activAlarm" type="button">Alarm On/Off</button>
-  <h4>Set Alarm</h4>
+  <a href='/' style='margin-bottom: 20px; display: block;'>Home page</a>
+  <b>Current Time: <span id="currentTime"></span></b><br/>
+  <b>Alarm Time: <span id="alarmTime"></span></b><br/>
+  <b>Set Alarm</b>
   <form action="/setAlarm">
     <input type="text" name="alarmHour" placeholder="Hour" style="width: 40px;">
     <input type="text" name="alarmMinute" placeholder="Minute" style="width: 40px;">
     <input type="submit" value="Set Alarm">
   </form>
 
-  <h4>Set Time</h4>
+  <b>Set Time</b>
   <form action="/setTime">
     <input type="text" name="hour" placeholder="Hour" style="width: 40px;">
     <input type="text" name="minute" placeholder="Minute" style="width: 40px;">
@@ -437,12 +450,6 @@ const char* clock_page PROGMEM = R"rawliteral(
   </form> 
 
   <script>
-    document.getElementById("activAlarm").addEventListener("click", function(){
-      var xhr = new XMLHttpRequest();
-      xhr.open("GET", "/activAlarm", true);
-      xhr.send();
-    });
-
     function updateTime() {
       fetch('/getTime')
         .then(response => response.text())
@@ -473,11 +480,6 @@ void configClockPage(){
   server.on("/time", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send_P(200, "text/html", clock_page);
   });
-    // Toggle the state when the Play/Stop button is pressed
-  server.on("/activAlarm", HTTP_GET, [](AsyncWebServerRequest *request){
-      flagModeAlarm = (flagModeAlarm) ? false: true; 
-      request->send(200);
-  });
 // Handle setting the time
 server.on("/setTime", HTTP_GET, [] (AsyncWebServerRequest *request) {
   int hour, minute, second;
@@ -506,21 +508,25 @@ server.on("/setTime", HTTP_GET, [] (AsyncWebServerRequest *request) {
       AsyncWebParameter* p = request->getParam(i);
       if(p->name()=="alarmHour") {
         alarmHour = p->value().toInt();
+        EEPROM.write(ALARM_HOUR_ADDR, alarmHour);
       }
       if(p->name()=="alarmMinute") {
         alarmMinute = p->value().toInt();
+        EEPROM.write(ALARM_MIN_ADDR, alarmMinute);
       }
     }
     flagModeAlarm = true;
+    EEPROM.write(ALARM_FLAG_ADDR, flagModeAlarm);
+    EEPROM.commit();
     request->send(200, "text/plain", "OK");
   });
   server.on("/getTime", HTTP_GET, [] (AsyncWebServerRequest *request) {
   DateTime now = rtc.now();
-  String currentTime = String(now.hour()) + ":" + String(now.minute());
+  String currentTime = String(now.hour()) + ":" + fineStrMinute(now.minute());
   request->send(200, "text/plain", currentTime);
   });
   server.on("/getAlarm", HTTP_GET, [] (AsyncWebServerRequest *request) {
-    String alarmTime = String(alarmHour) + ":" + String(alarmMinute);
+    String alarmTime = String(alarmHour) + ":" + fineStrMinute(alarmMinute);
     request->send(200, "text/plain", alarmTime);
   });
 
@@ -543,4 +549,27 @@ String readStringEEPROM(int addr) {
     data = data + (char)EEPROM.read(addr + 1 + i);
   }
   return data;
+}
+
+void deleteTrack(String tracksList[], int &trackCount, const String &trackName) {
+    int i = 0;
+    while (i < trackCount) {
+        if (tracksList[i] == trackName) {
+            for (int j = i; j < trackCount - 1; j++) {
+                tracksList[j] = tracksList[j + 1];
+            }
+            trackCount--;
+        } else {
+            i++;
+        }
+    }
+}
+
+String fineStrMinute(int minute){
+  String fineMinute; 
+  if (minute < 10){
+    fineMinute += "0"; 
+  }
+  fineMinute += String(minute); 
+  return fineMinute;
 }
