@@ -30,7 +30,6 @@
 #define ALARM_FLAG_ADDR 203
 #define MAX_ATTEMPTS 20            // How many repeates do WIFi connection
 #define SPI_FREQ 10000000
-#define PERIOD_CHECK_ALARM_TIME 1000
 
 #define MAX_TRACKS 100
 String tracks[MAX_TRACKS];
@@ -53,7 +52,6 @@ bool flagModeAlarm = false;
 // Alarm time
 int alarmHour = 0;
 int alarmMinute = 0;
-unsigned long long checkTime = 0; 
 // Server
 AsyncWebServer server(80);
 
@@ -127,10 +125,7 @@ void setup() {
 }
 
 void loop() {
-  if (millis() - checkTime > PERIOD_CHECK_ALARM_TIME) {
-    checkTime = millis(); 
-    DateTime now = rtc.now();
-  }
+  DateTime now = rtc.now();
   // Check if it's time to alarm
   if (flagModeAlarm && now.hour() == alarmHour && now.minute() == alarmMinute) {
     audio.setVolume(15);
@@ -345,6 +340,7 @@ const char main_page_start[] PROGMEM= R"rawliteral(
 )rawliteral";
 
 const char main_page_end[] PROGMEM= R"rawliteral(
+<br/>
 <a href="/playlist">Playlist</a><br/>
 <a href="/time">Time and Alarm</a><br/>
 <a href="/wifi">Wi-Fi settings</a><br/>
@@ -393,9 +389,7 @@ void configMainPage() {
     String main_page = FPSTR(main_page_start);   // start the HTML
     main_page += R"rawliteral(<label id="volumeLabel1">Volume:)rawliteral" + String(currentVolume) + "</label> <br/> ";
     main_page += R"rawliteral(<input type="range" min="0" max="21" value=")rawliteral" + String(currentVolume) + R"rawliteral(" id="volumeSlider1">)rawliteral"; 
-    if (flagModeAlarm) {
-      main_page += "<p> Alarm is set: " + String(alarmHour) + ":" + String(alarmMinute) + "</p>";
-    } 
+    main_page += "<p> Alarm is set: " + String(alarmHour) + ":" + fineStrMinute(alarmMinute) + "</p>";
     main_page += FPSTR(main_page_end);           // finish the HTML
     request->send(200, "text/html", main_page);
   });
@@ -528,11 +522,11 @@ server.on("/setTime", HTTP_GET, [] (AsyncWebServerRequest *request) {
   });
   server.on("/getTime", HTTP_GET, [] (AsyncWebServerRequest *request) {
   DateTime now = rtc.now();
-  String currentTime = String(now.hour()) + ":" + String(now.minute());
+  String currentTime = String(now.hour()) + ":" + fineStrMinute(now.minute());
   request->send(200, "text/plain", currentTime);
   });
   server.on("/getAlarm", HTTP_GET, [] (AsyncWebServerRequest *request) {
-    String alarmTime = String(alarmHour) + ":" + String(alarmMinute);
+    String alarmTime = String(alarmHour) + ":" + fineStrMinute(alarmMinute);
     request->send(200, "text/plain", alarmTime);
   });
 
@@ -569,4 +563,13 @@ void deleteTrack(String tracksList[], int &trackCount, const String &trackName) 
             i++;
         }
     }
+}
+
+String fineStrMinute(int minute){
+  String fineMinute; 
+  if (minute < 10){
+    fineMinute += "0"; 
+  }
+  fineMinute += String(minute); 
+  return fineMinute;
 }
