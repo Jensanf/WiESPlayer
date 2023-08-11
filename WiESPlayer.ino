@@ -144,12 +144,12 @@ void loop() {
   audio.loop();
 }
 
-void audio_eof_mp3(const char *info) {
-  if (trackCount > 0 ) {
-    currentTrack = (currentTrack + 1) % trackCount; // loop back to the first track after the last one
-    audio.connecttoSD(tracks[currentTrack].c_str());  // start playing the next track
-  }
-}
+// void audio_eof_mp3(const char *info) {
+//   if (trackCount > 0 ) {
+//     currentTrack = (currentTrack + 1) % trackCount; // loop back to the first track after the last one
+//     audio.connecttoSD(tracks[currentTrack].c_str());  // start playing the next track
+//   }
+// }
 // void audio_info(const char *info) {
 //   Serial.print("info        "); 
 //   Serial.println(info);
