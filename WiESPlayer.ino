@@ -28,6 +28,13 @@
 #define ALARM_HOUR_ADDR 201
 #define ALARM_MIN_ADDR 202
 #define ALARM_FLAG_ADDR 203
+#define DAY_NIGHT_FLAG_ADDR 204 
+#define START_NIGHT_HOUR_ADDR 205
+#define START_NIGHT_MIN_ADDR 206
+#define START_DAY_HOUR_ADDR 207
+#define START_DAY_MIN_ADDR 208
+#define NIGHT_VOLUME_ADDR 209
+#define DAY_VOLUME_ADDR 210
 #define MAX_ATTEMPTS 20            // How many repeates do WIFi connection
 #define SPI_FREQ 10000000
 
@@ -48,10 +55,18 @@ bool flagPrevSong = false;
 
 // Player modes
 bool flagModeAlarm = false;
+bool flagModeDayNight = false; 
 
 // Alarm time
 int alarmHour = 0;
 int alarmMinute = 0;
+int startNightHour = 0;
+int startDayHour = 0; 
+int startNightMinute = 0; 
+int startDayMinute = 0; 
+int nightVolume = 0; 
+int dayVolume = 0; 
+
 // Server
 AsyncWebServer server(80);
 
@@ -86,15 +101,30 @@ void setup() {
   while (!SD.begin(SD_CS));
 
   EEPROM.begin(EEPROM_SIZE);
+
   currentVolume = EEPROM.read(VOLUME_ADDR);
   alarmHour = EEPROM.read(ALARM_HOUR_ADDR);
   alarmMinute = EEPROM.read(ALARM_MIN_ADDR);
   flagModeAlarm = EEPROM.read(ALARM_FLAG_ADDR);
+  flagModeDayNight = EEPROM.read(DAY_NIGHT_FLAG_ADDR);
+  startNightHour = EEPROM.read(START_NIGHT_HOUR_ADDR);
+  startDayHour = EEPROM.read(START_DAY_HOUR_ADDR); 
+  startNightMinute = EEPROM.read(START_NIGHT_MIN_ADDR); 
+  startDayMinute = EEPROM.read(START_DAY_MIN_ADDR); 
+  nightVolume = EEPROM.read(NIGHT_VOLUME_ADDR); 
+  dayVolume = EEPROM.read(DAY_VOLUME_ADDR);
 
   currentVolume = (currentVolume > 21 || currentVolume < 0) ? 5 : currentVolume;
   alarmHour = (alarmHour > 24 || alarmHour < 0) ? 0 : alarmHour;
   alarmMinute = (alarmMinute > 59 || alarmMinute < 0) ? 0 : alarmMinute;
   flagModeAlarm = (flagModeAlarm > 1 || flagModeAlarm < 0) ? 0 : flagModeAlarm;
+  flagModeDayNight = (flagModeDayNight > 1 || flagModeDayNight < 0) ? 0 : flagModeDayNight;
+  startNightHour = (startNightHour > 24 || startNightHour < 0) ? 0 : startNightHour;
+  startDayHour =(startDayHour > 24 || startDayHour < 0) ? 0 : startDayHour;
+  startNightMinute = (startNightMinute > 59 || startNightMinute < 0) ? 0 : startNightMinute;
+  startDayMinute = (startDayMinute > 59 || startDayMinute < 0) ? 0 : startDayMinute; 
+  nightVolume = (nightVolume > 21 || nightVolume < 0) ? 5 : nightVolume;
+  dayVolume = (dayVolume > 21 || dayVolume < 0) ? 5 : dayVolume;
 
   if(!connectToGlobalWiFi(readStringEEPROM(GLOABAL_SSID_ADDR).c_str(), 
                           readStringEEPROM(GLOABAL_PASSWORD_ADDR).c_str())) {
@@ -126,9 +156,11 @@ void setup() {
 
 void loop() {
   DateTime now = rtc.now();
+  audio.loop();
   // Check if it's time to alarm
   if (flagModeAlarm && now.hour() == alarmHour && now.minute() == alarmMinute) {
-    audio.setVolume(15);
+    currentVolume = 15; 
+    audio.setVolume(currentVolume);
     flagModeAlarm = false;
   }
   if (flagNextSong) {
@@ -141,19 +173,22 @@ void loop() {
     audio.connecttoSD(tracks[currentTrack].c_str());
     flagPrevSong = false; 
   }
-  audio.loop();
+  if ((now.hour() > startDayHour || (now.hour() == startDayHour && now.minute() >= startDayMinute)) 
+    && (now.hour() < startNightHour || (now.hour() == startNightHour && now.minute() < startNightMinute))) {
+    currentVolume = dayVolume;
+    audio.setVolume(currentVolume);
+  } else {
+    currentVolume = nightVolume;
+    audio.setVolume(currentVolume);
+  }
 }
 
-// void audio_eof_mp3(const char *info) {
-//   if (trackCount > 0 ) {
-//     currentTrack = (currentTrack + 1) % trackCount; // loop back to the first track after the last one
-//     audio.connecttoSD(tracks[currentTrack].c_str());  // start playing the next track
-//   }
-// }
-// void audio_info(const char *info) {
-//   Serial.print("info        "); 
-//   Serial.println(info);
-// }
+void audio_eof_mp3(const char *info) {
+  if (trackCount > 0 ) {
+    currentTrack = (currentTrack + 1) % trackCount; // loop back to the first track after the last one
+    audio.connecttoSD(tracks[currentTrack].c_str());  // start playing the next track
+  }
+}
 
 bool isMusicFile(String fileName) {
   String extension = fileName.substring(fileName.lastIndexOf('.') + 1);
@@ -340,7 +375,9 @@ const char main_page_start[] PROGMEM= R"rawliteral(
 )rawliteral";
 
 const char main_page_end[] PROGMEM= R"rawliteral(
-<br/>
+<b> Modes: </b>
+<button id="modeAlarm" type="button">Alarm</button> 
+<button id="modeDayNight" type="button">Day/Night</button> <br/>
 <a href="/playlist">Playlist</a><br/>
 <a href="/time">Time and Alarm</a><br/>
 <a href="/wifi">Wi-Fi settings</a><br/>
@@ -377,6 +414,16 @@ const char main_page_end[] PROGMEM= R"rawliteral(
       xhr.send();
       document.getElementById("volumeLabel1").innerHTML = "Volume: " + this.value;
   });
+  document.getElementById("modeAlarm").addEventListener("click", function(){
+      var xhr = new XMLHttpRequest();
+      xhr.open("GET", "/modeAlarm", true);
+      xhr.send();
+  });
+  document.getElementById("modeDayNight").addEventListener("click", function(){
+      var xhr = new XMLHttpRequest();
+      xhr.open("GET", "/modeDayNight", true);
+      xhr.send();
+  });
   updateTrack();
   setInterval(updateTrack, 2000);
 </script>
@@ -388,8 +435,14 @@ void configMainPage() {
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
     String main_page = FPSTR(main_page_start);   // start the HTML
     main_page += R"rawliteral(<label id="volumeLabel1">Volume:)rawliteral" + String(currentVolume) + "</label> <br/> ";
-    main_page += R"rawliteral(<input type="range" min="0" max="21" value=")rawliteral" + String(currentVolume) + R"rawliteral(" id="volumeSlider1">)rawliteral"; 
-    main_page += "<p> Alarm is set: " + String(alarmHour) + ":" + fineStrMinute(alarmMinute) + "</p>";
+    main_page += R"rawliteral(<input type="range" min="0" max="21" value=")rawliteral" + String(currentVolume) + R"rawliteral(" id="volumeSlider1"><br/>)rawliteral"; 
+    if (flagModeAlarm) {
+      main_page += "<p> Alarm is set: " + String(alarmHour) + ":" + fineStrMinute(alarmMinute) + "</p>";
+    }
+    if (flagModeDayNight) {
+      main_page += "<p> Day starts: " + String(startDayHour) + ":" + fineStrMinute(startDayMinute) + " with volume: " + String(dayVolume) + "</p>";
+      main_page += "<p> Night starts: " + String(startNightHour) + ":" + fineStrMinute(startNightMinute) + " with volume: " + String(nightVolume) + "</p>";
+    }
     main_page += FPSTR(main_page_end);           // finish the HTML
     request->send(200, "text/html", main_page);
   });
@@ -426,6 +479,18 @@ void configMainPage() {
           request->send(400, "text/plain", "Bad request");
       }
   });
+  server.on("/modeAlarm", HTTP_GET, [](AsyncWebServerRequest *request){
+      flagModeAlarm = (flagModeAlarm) ? false : true; 
+      EEPROM.write(ALARM_FLAG_ADDR,flagModeAlarm);
+      EEPROM.commit();
+      request->send(200);
+  });
+  server.on("/modeDayNight", HTTP_GET, [](AsyncWebServerRequest *request){
+      flagModeDayNight = (flagModeDayNight) ? false : true; 
+      EEPROM.write(DAY_NIGHT_FLAG_ADDR,flagModeDayNight);
+      EEPROM.commit();
+      request->send(200);
+  });
 }
 const char* clock_page PROGMEM = R"rawliteral(
 <!DOCTYPE HTML>
@@ -448,6 +513,22 @@ const char* clock_page PROGMEM = R"rawliteral(
     <input type="text" name="second" placeholder="Second" style="width: 50px;">
     <input type="submit" value="Set Time">
   </form> 
+
+  <b>Set Day start</b>
+  <form action="/setStartDay">
+    <input type="text" name="startDayHour" placeholder="Hour" style="width: 40px;">
+    <input type="text" name="startDayMinute" placeholder="Minute" style="width: 40px;">
+    <input type="text" name="dayVolume" placeholder="Volume" style="width: 40px;">
+    <input type="submit" value="Set">
+  </form>
+
+  <b>Set Night start</b>
+  <form action="/setStartNight">
+    <input type="text" name="startNightHour" placeholder="Hour" style="width: 40px;">
+    <input type="text" name="startNightMinute" placeholder="Minute" style="width: 40px;">
+    <input type="text" name="nightVolume" placeholder="Volume" style="width: 40px;">
+    <input type="submit" value="Set">
+  </form>
 
   <script>
     function updateTime() {
@@ -520,6 +601,54 @@ server.on("/setTime", HTTP_GET, [] (AsyncWebServerRequest *request) {
     EEPROM.commit();
     request->send(200, "text/plain", "OK");
   });
+
+  server.on("/setStartDay", HTTP_GET, [] (AsyncWebServerRequest *request) {
+    int params = request->params();
+    for(int i=0;i<params;i++){
+      AsyncWebParameter* p = request->getParam(i);
+      if(p->name()=="startDayHour") {
+        startDayHour = p->value().toInt();
+        EEPROM.write(START_DAY_HOUR_ADDR, startDayHour);
+      }
+      if(p->name()=="startDayMinute") {
+        startDayMinute = p->value().toInt();
+        EEPROM.write(START_DAY_MIN_ADDR, startDayMinute);
+      }
+      if(p->name()=="dayVolume") {
+        dayVolume = p->value().toInt();
+        EEPROM.write(DAY_VOLUME_ADDR, dayVolume);
+      }
+    }
+    flagModeDayNight = true;
+    EEPROM.write(DAY_NIGHT_FLAG_ADDR, flagModeDayNight);
+    EEPROM.commit();
+    request->send(200, "text/plain", "OK");
+  });
+
+  server.on("/setStartNight", HTTP_GET, [] (AsyncWebServerRequest *request) {
+    int params = request->params();
+    for(int i=0;i<params;i++){
+      AsyncWebParameter* p = request->getParam(i);
+      if(p->name()=="startNightHour") {
+        startNightHour = p->value().toInt();
+        EEPROM.write(START_NIGHT_HOUR_ADDR, startNightHour); 
+      }
+      if(p->name()=="startNightMinute") {
+        startNightMinute = p->value().toInt();
+        EEPROM.write(START_NIGHT_MIN_ADDR, startNightMinute);
+      }
+      if(p->name()=="nightVolume") {
+        nightVolume = p->value().toInt();
+        EEPROM.write(NIGHT_VOLUME_ADDR, nightVolume);
+      }
+    }
+
+    flagModeDayNight = true;
+    EEPROM.write(DAY_NIGHT_FLAG_ADDR, flagModeDayNight);
+    EEPROM.commit();
+    request->send(200, "text/plain", "OK");
+  });
+
   server.on("/getTime", HTTP_GET, [] (AsyncWebServerRequest *request) {
   DateTime now = rtc.now();
   String currentTime = String(now.hour()) + ":" + fineStrMinute(now.minute());
