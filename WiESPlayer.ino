@@ -175,7 +175,7 @@ void loop() {
     audio.connecttoSD(tracks[currentTrack].c_str());
     flagPrevSong = false; 
   }
-  if ((now.hour() > startDayHour || (now.hour() == startDayHour && now.minute() >= startDayMinute)) 
+  if (flagModeDayNight && (now.hour() > startDayHour || (now.hour() == startDayHour && now.minute() >= startDayMinute)) 
     && (now.hour() < startNightHour || (now.hour() == startNightHour && now.minute() < startNightMinute))) {
     currentVolume = dayVolume;
     audio.setVolume(currentVolume);
@@ -438,7 +438,7 @@ void configMainPage() {
     String main_page = FPSTR(main_page_start);   // start the HTML
     main_page += R"rawliteral(<label id="volumeLabel1">Volume:)rawliteral" + String(currentVolume) + "</label> <br/> ";
     main_page += R"rawliteral(<input type="range" min="0" max="21" value=")rawliteral" + String(currentVolume) + R"rawliteral(" id="volumeSlider1"><br/>)rawliteral"; 
-    main_page += "<p> Web Time: " +   fetchTimeFromWorldTimeAPI() + "</p>";
+    // main_page += "<p> Web Time: " +   fetchTimeFromWorldTimeAPI() + "</p>";
     if (flagModeAlarm) {
       main_page += "<p> Alarm is set: " + String(alarmHour) + ":" + fineStrMinute(alarmMinute) + "</p>";
     }
@@ -706,33 +706,33 @@ String fineStrMinute(int minute){
   return fineMinute;
 }
 
-String fetchTimeFromWorldTimeAPI() {
-  WiFiClientSecure client;
-  client.setInsecure();
-  HTTPClient https;
+// String fetchTimeFromWorldTimeAPI() {
+//   WiFiClientSecure client;
+//   client.setInsecure();
+//   HTTPClient https;
 
-    // Specify to trust any certificate for this connection (not secure for production!)
-    https.begin(client, "https://time.is/clock");
+//     // Specify to trust any certificate for this connection (not secure for production!)
+//     https.begin(client, "https://time.is/clock");
 
-    int httpCode = https.GET();
+//     int httpCode = https.GET();
 
-    if (httpCode > 0) {
-      String payload = https.getString();
-      int titleStart = payload.indexOf("<title>") + 7;
-      int titleEnd = payload.indexOf("</title>");
+//     if (httpCode > 0) {
+//       String payload = https.getString();
+//       int titleStart = payload.indexOf("<title>") + 7;
+//       int titleEnd = payload.indexOf("</title>");
 
-      if(titleStart != -1 && titleEnd != -1) {
-        String titleContent = payload.substring(titleStart, titleEnd);
-        Serial.println(titleContent);
-        https.end();
-        return titleContent;
-      }
-    } else {
-      Serial.printf("[HTTP] GET... failed, error: %s\n", https.errorToString(httpCode).c_str());
-      https.end();
-      return https.errorToString(httpCode).c_str();
-    }
+//       if(titleStart != -1 && titleEnd != -1) {
+//         String titleContent = payload.substring(titleStart, titleEnd);
+//         Serial.println(titleContent);
+//         https.end();
+//         return titleContent;
+//       }
+//     } else {
+//       Serial.printf("[HTTP] GET... failed, error: %s\n", https.errorToString(httpCode).c_str());
+//       https.end();
+//       return https.errorToString(httpCode).c_str();
+//     }
 
-    https.end();
-    return "FAIL";
-  }
+//     https.end();
+//     return "FAIL";
+//   }
