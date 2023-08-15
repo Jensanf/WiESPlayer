@@ -10,7 +10,6 @@
 #include "SD.h"
 #include "FS.h"
 #include "RTClib.h"
-#include <WiFiClientSecure.h>
 
 // Digital I/O used
 #define SD_CS          5
@@ -90,6 +89,7 @@ void configMainPage(void);
 void configPlaylistPage(void);
 void configClockPage(void);
 void deleteTrack(String tracksList[], int &trackCount, const String &trackName); 
+String createOkResponse(const String& url);
 
 void setup() {
   rtc.begin();
@@ -142,7 +142,6 @@ void setup() {
   server.begin();
   
   MDNS.addService("http", "tcp", 80);
-  audio.setVolume(currentVolume); // 0...21
 
   rootDirectory = SD.open("/");
   File file = rootDirectory.openNextFile();
@@ -154,6 +153,19 @@ void setup() {
   }
   currentTrack = esp_random() % trackCount; // random(0, trackCount);
   audio.connecttoSD(tracks[currentTrack].c_str());
+
+  audio.setVolume(currentVolume); // 0...21
+  if(flagModeDayNight){
+    if ((now.hour() > startDayHour || (now.hour() == startDayHour && now.minute() >= startDayMinute)) 
+      && (now.hour() < startNightHour || (now.hour() == startNightHour && now.minute() < startNightMinute))) {
+      currentVolume = dayVolume;
+      audio.setVolume(currentVolume);
+    } else {
+      currentVolume = nightVolume;
+      audio.setVolume(currentVolume);
+    }
+  }
+  
 }
 
 void loop() {
@@ -174,14 +186,6 @@ void loop() {
     currentTrack = (currentTrack - 1 + trackCount) % trackCount;
     audio.connecttoSD(tracks[currentTrack].c_str());
     flagPrevSong = false; 
-  }
-  if (flagModeDayNight && (now.hour() > startDayHour || (now.hour() == startDayHour && now.minute() >= startDayMinute)) 
-    && (now.hour() < startNightHour || (now.hour() == startNightHour && now.minute() < startNightMinute))) {
-    currentVolume = dayVolume;
-    audio.setVolume(currentVolume);
-  } else {
-    currentVolume = nightVolume;
-    audio.setVolume(currentVolume);
   }
 }
 
@@ -227,7 +231,7 @@ void configOTAPage() {
 
   server.on("/update", HTTP_POST, [](AsyncWebServerRequest *request) {
     int code = Update.hasError() ? 500 : 200;
-    request->send(code, "text/plain", Update.hasError() ? "FAIL" : "OK");
+    request->send(code, "text/html", Update.hasError() ? "FAIL" : createOkResponse("/",3));
     delay(100);
     ESP.restart();
   },[](AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
@@ -356,7 +360,7 @@ void configPlaylistPage() {
     if(request->hasParam("file")) {
       String filename = request->getParam("file")->value();
       if(SD.remove("/" + filename)) {
-        request->send(200, "text/plain", "File deleted");
+        request->send(200, "text/html", createOkResponse("/playlist",1));
         deleteTrack(tracks, trackCount, filename);
       } else {
         request->send(500, "text/plain", "Delete failed");
@@ -378,8 +382,8 @@ const char main_page_start[] PROGMEM= R"rawliteral(
 
 const char main_page_end[] PROGMEM= R"rawliteral(
 <b> Modes: </b>
-<button id="modeAlarm" type="button">Alarm</button> 
-<button id="modeDayNight" type="button">Day/Night</button> <br/>
+<button id="modeAlarm" type="button" onclick="setTimeout(function(){ location.reload(); }, 500);">Alarm</button> 
+<button id="modeDayNight" type="button" onclick="setTimeout(function(){ location.reload(); }, 500);">Day/Night</button> <br/>
 <a href="/playlist">Playlist</a><br/>
 <a href="/time">Time and Alarm</a><br/>
 <a href="/wifi">Wi-Fi settings</a><br/>
@@ -438,7 +442,6 @@ void configMainPage() {
     String main_page = FPSTR(main_page_start);   // start the HTML
     main_page += R"rawliteral(<label id="volumeLabel1">Volume:)rawliteral" + String(currentVolume) + "</label> <br/> ";
     main_page += R"rawliteral(<input type="range" min="0" max="21" value=")rawliteral" + String(currentVolume) + R"rawliteral(" id="volumeSlider1"><br/>)rawliteral"; 
-    // main_page += "<p> Web Time: " +   fetchTimeFromWorldTimeAPI() + "</p>";
     if (flagModeAlarm) {
       main_page += "<p> Alarm is set: " + String(alarmHour) + ":" + fineStrMinute(alarmMinute) + "</p>";
     }
@@ -486,13 +489,11 @@ void configMainPage() {
       flagModeAlarm = (flagModeAlarm) ? false : true; 
       EEPROM.write(ALARM_FLAG_ADDR,flagModeAlarm);
       EEPROM.commit();
-      request->send(200);
   });
   server.on("/modeDayNight", HTTP_GET, [](AsyncWebServerRequest *request){
       flagModeDayNight = (flagModeDayNight) ? false : true; 
       EEPROM.write(DAY_NIGHT_FLAG_ADDR,flagModeDayNight);
       EEPROM.commit();
-      request->send(200);
   });
 }
 const char* clock_page PROGMEM = R"rawliteral(
@@ -582,7 +583,7 @@ server.on("/setTime", HTTP_GET, [] (AsyncWebServerRequest *request) {
   }
   DateTime newTime = DateTime(now.year(), now.month(), now.day(), hour, minute, second);
   rtc.adjust(newTime);
-  request->send(200, "text/plain", "OK");
+  request->send(200, "text/html", createOkResponse("/time",1));
 });
 
   // Handle setting the alarm
@@ -602,7 +603,7 @@ server.on("/setTime", HTTP_GET, [] (AsyncWebServerRequest *request) {
     flagModeAlarm = true;
     EEPROM.write(ALARM_FLAG_ADDR, flagModeAlarm);
     EEPROM.commit();
-    request->send(200, "text/plain", "OK");
+    request->send(200, "text/html", createOkResponse("/time",1));
   });
 
   server.on("/setStartDay", HTTP_GET, [] (AsyncWebServerRequest *request) {
@@ -625,7 +626,7 @@ server.on("/setTime", HTTP_GET, [] (AsyncWebServerRequest *request) {
     flagModeDayNight = true;
     EEPROM.write(DAY_NIGHT_FLAG_ADDR, flagModeDayNight);
     EEPROM.commit();
-    request->send(200, "text/plain", "OK");
+    request->send(200, "text/html", createOkResponse("/time",1));
   });
 
   server.on("/setStartNight", HTTP_GET, [] (AsyncWebServerRequest *request) {
@@ -649,7 +650,7 @@ server.on("/setTime", HTTP_GET, [] (AsyncWebServerRequest *request) {
     flagModeDayNight = true;
     EEPROM.write(DAY_NIGHT_FLAG_ADDR, flagModeDayNight);
     EEPROM.commit();
-    request->send(200, "text/plain", "OK");
+    request->send(200, "text/html", createOkResponse("/time",1));
   });
 
   server.on("/getTime", HTTP_GET, [] (AsyncWebServerRequest *request) {
@@ -705,34 +706,12 @@ String fineStrMinute(int minute){
   fineMinute += String(minute); 
   return fineMinute;
 }
-
-// String fetchTimeFromWorldTimeAPI() {
-//   WiFiClientSecure client;
-//   client.setInsecure();
-//   HTTPClient https;
-
-//     // Specify to trust any certificate for this connection (not secure for production!)
-//     https.begin(client, "https://time.is/clock");
-
-//     int httpCode = https.GET();
-
-//     if (httpCode > 0) {
-//       String payload = https.getString();
-//       int titleStart = payload.indexOf("<title>") + 7;
-//       int titleEnd = payload.indexOf("</title>");
-
-//       if(titleStart != -1 && titleEnd != -1) {
-//         String titleContent = payload.substring(titleStart, titleEnd);
-//         Serial.println(titleContent);
-//         https.end();
-//         return titleContent;
-//       }
-//     } else {
-//       Serial.printf("[HTTP] GET... failed, error: %s\n", https.errorToString(httpCode).c_str());
-//       https.end();
-//       return https.errorToString(httpCode).c_str();
-//     }
-
-//     https.end();
-//     return "FAIL";
-//   }
+String createOkResponse(const String& url, int delaySec) {
+  String delaySecStr = String(delaySec); 
+    return "<html>"
+           "<head>"
+           "<meta http-equiv='refresh' content='"+ delaySecStr + ";url=" + url + "'>"
+           "</head>"
+           "<body>OK. Redirecting in " + delaySecStr + " seconds...</body>"
+           "</html>";
+}
