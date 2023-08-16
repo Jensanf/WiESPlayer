@@ -35,7 +35,10 @@
 #define START_DAY_MIN_ADDR 208
 #define NIGHT_VOLUME_ADDR 209
 #define DAY_VOLUME_ADDR 210
+#define ALARM_VOLUME_ADDR 211
+#define ALARM_SONG_ADDR 220
 #define MAX_ATTEMPTS 20            // How many repeates do WIFi connection
+#define MAX_SONGNAME_LENGTH 30
 #define SPI_FREQ 10000000
 
 #define MAX_TRACKS 100
@@ -55,6 +58,7 @@ bool flagPrevSong = false;
 
 // Player modes
 bool flagModeAlarm = false;
+bool flagAlarm = false; 
 bool flagModeDayNight = false; 
 
 // Alarm time
@@ -66,7 +70,8 @@ int startNightMinute = 0;
 int startDayMinute = 0; 
 int nightVolume = 0; 
 int dayVolume = 0; 
-
+int alarmVolume = 0; 
+String alarmSong = "";
 // Server
 AsyncWebServer server(80);
 
@@ -88,6 +93,7 @@ void configMainPage(void);
 void configPlaylistPage(void);
 void configClockPage(void);
 void deleteTrack(String tracksList[], int &trackCount, const String &trackName); 
+String createOkResponse(const String& url);
 
 void setup() {
   rtc.begin();
@@ -113,6 +119,7 @@ void setup() {
   startDayMinute = EEPROM.read(START_DAY_MIN_ADDR); 
   nightVolume = EEPROM.read(NIGHT_VOLUME_ADDR); 
   dayVolume = EEPROM.read(DAY_VOLUME_ADDR);
+  alarmVolume = EEPROM.read(ALARM_VOLUME_ADDR); 
 
   currentVolume = (currentVolume > 21 || currentVolume < 0) ? 5 : currentVolume;
   alarmHour = (alarmHour > 24 || alarmHour < 0) ? 0 : alarmHour;
@@ -125,6 +132,10 @@ void setup() {
   startDayMinute = (startDayMinute > 59 || startDayMinute < 0) ? 0 : startDayMinute; 
   nightVolume = (nightVolume > 21 || nightVolume < 0) ? 5 : nightVolume;
   dayVolume = (dayVolume > 21 || dayVolume < 0) ? 5 : dayVolume;
+  alarmVolume = (alarmVolume > 21 || alarmVolume < 0) ? 5 : alarmVolume;
+  if (EEPROM.read(ALARM_SONG_ADDR) <= MAX_SONGNAME_LENGTH ){
+    alarmSong = readStringEEPROM(ALARM_SONG_ADDR);
+  }
 
   if(!connectToGlobalWiFi(readStringEEPROM(GLOABAL_SSID_ADDR).c_str(), 
                           readStringEEPROM(GLOABAL_PASSWORD_ADDR).c_str())) {
@@ -140,28 +151,57 @@ void setup() {
   server.begin();
   
   MDNS.addService("http", "tcp", 80);
-  audio.setVolume(currentVolume); // 0...21
-
+  bool alarmSongCheck = false; 
   rootDirectory = SD.open("/");
   File file = rootDirectory.openNextFile();
   while(file && trackCount < MAX_TRACKS) {
     if (isMusicFile(file.name())) {
       tracks[trackCount++] = String(file.name());
+      if (alarmSong == String(file.name())) {       // Check if the alarm song in current track list
+        alarmSongCheck = true;
+      } 
     }
     file = rootDirectory.openNextFile();
   }
   currentTrack = esp_random() % trackCount; // random(0, trackCount);
   audio.connecttoSD(tracks[currentTrack].c_str());
+  if (!alarmSongCheck) {
+    int i = 0; 
+    while(i < trackCount) {
+      if (tracks[i].length() <= MAX_SONGNAME_LENGTH) {
+        alarmSong = tracks[i];
+        writeStringEEPROM(ALARM_SONG_ADDR, alarmSong);
+        break;
+      } else {
+        i++; 
+      }
+    } 
+  }
+  audio.setVolume(currentVolume); // 0...21
+  if(flagModeDayNight) {
+    if ((now.hour() > startDayHour || (now.hour() == startDayHour && now.minute() >= startDayMinute)) 
+      && (now.hour() < startNightHour || (now.hour() == startNightHour && now.minute() < startNightMinute))) {
+      currentVolume = dayVolume;
+      audio.setVolume(currentVolume);
+    } else {
+      currentVolume = nightVolume;
+      audio.setVolume(currentVolume);
+    }
+  }
 }
 
 void loop() {
   DateTime now = rtc.now();
   audio.loop();
   // Check if it's time to alarm
-  if (flagModeAlarm && now.hour() == alarmHour && now.minute() == alarmMinute) {
-    currentVolume = 15; 
+  if (flagModeAlarm && flagAlarm && now.hour() == alarmHour && now.minute() == alarmMinute) {
+    currentVolume = alarmVolume; 
     audio.setVolume(currentVolume);
-    flagModeAlarm = false;
+    currentTrack = findIdSong(tracks, trackCount, alarmSong); 
+    audio.connecttoSD(tracks[currentTrack].c_str());
+    flagAlarm = false;
+  } else if (now.minute() != alarmMinute && flagModeAlarm && !flagAlarm){
+    flagAlarm = true;  // Change flag of alarm to repeat it tomorrow
   }
   if (flagNextSong) {
     currentTrack = (currentTrack + 1) % trackCount;
@@ -172,14 +212,6 @@ void loop() {
     currentTrack = (currentTrack - 1 + trackCount) % trackCount;
     audio.connecttoSD(tracks[currentTrack].c_str());
     flagPrevSong = false; 
-  }
-  if ((now.hour() > startDayHour || (now.hour() == startDayHour && now.minute() >= startDayMinute)) 
-    && (now.hour() < startNightHour || (now.hour() == startNightHour && now.minute() < startNightMinute))) {
-    currentVolume = dayVolume;
-    audio.setVolume(currentVolume);
-  } else {
-    currentVolume = nightVolume;
-    audio.setVolume(currentVolume);
   }
 }
 
@@ -225,7 +257,7 @@ void configOTAPage() {
 
   server.on("/update", HTTP_POST, [](AsyncWebServerRequest *request) {
     int code = Update.hasError() ? 500 : 200;
-    request->send(code, "text/plain", Update.hasError() ? "FAIL" : "OK");
+    request->send(code, "text/html", Update.hasError() ? "FAIL" : createOkResponse("/",3));
     delay(100);
     ESP.restart();
   },[](AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
@@ -315,10 +347,13 @@ void listDir(File dir, String& fileList) {
       break;
     }
     if (isMusicFile(entry.name())) {
+      fileList += " <a href=\"/alarmSong?file=";
+      fileList += entry.name();
+      fileList += "\">&#9200</a>";
       fileList += entry.name();
       fileList += " <a href=\"/delete?file=";
       fileList += entry.name();
-      fileList += "\">Remove</a><br>";
+      fileList += "\">Remove</a><br/>";
     }
     entry.close();
   }
@@ -354,10 +389,24 @@ void configPlaylistPage() {
     if(request->hasParam("file")) {
       String filename = request->getParam("file")->value();
       if(SD.remove("/" + filename)) {
-        request->send(200, "text/plain", "File deleted");
+        request->send(200, "text/html", createOkResponse("/playlist",1));
         deleteTrack(tracks, trackCount, filename);
       } else {
         request->send(500, "text/plain", "Delete failed");
+      }
+    } else {
+      request->send(400, "text/plain", "Bad request");
+    }
+  });
+  server.on("/alarmSong", HTTP_GET, [](AsyncWebServerRequest *request) {
+    if(request->hasParam("file")) {
+      String alarmNewSong = request->getParam("file")->value();
+      if (alarmNewSong.length() <= MAX_SONGNAME_LENGTH){
+        alarmSong = alarmNewSong;
+        writeStringEEPROM(ALARM_SONG_ADDR, alarmSong);
+        request->send(200, "text/html", createOkResponse("/playlist",1));
+      } else {
+        request->send(200, "text/plain", "Name of song more than " + String(MAX_SONGNAME_LENGTH) +" symbols! Make it shorter");
       }
     } else {
       request->send(400, "text/plain", "Bad request");
@@ -376,8 +425,8 @@ const char main_page_start[] PROGMEM= R"rawliteral(
 
 const char main_page_end[] PROGMEM= R"rawliteral(
 <b> Modes: </b>
-<button id="modeAlarm" type="button">Alarm</button> 
-<button id="modeDayNight" type="button">Day/Night</button> <br/>
+<button id="modeAlarm" type="button" onclick="setTimeout(function(){ location.reload(); }, 500);">Alarm</button> 
+<button id="modeDayNight" type="button" onclick="setTimeout(function(){ location.reload(); }, 500);">Day/Night</button> <br/>
 <a href="/playlist">Playlist</a><br/>
 <a href="/time">Time and Alarm</a><br/>
 <a href="/wifi">Wi-Fi settings</a><br/>
@@ -437,7 +486,8 @@ void configMainPage() {
     main_page += R"rawliteral(<label id="volumeLabel1">Volume:)rawliteral" + String(currentVolume) + "</label> <br/> ";
     main_page += R"rawliteral(<input type="range" min="0" max="21" value=")rawliteral" + String(currentVolume) + R"rawliteral(" id="volumeSlider1"><br/>)rawliteral"; 
     if (flagModeAlarm) {
-      main_page += "<p> Alarm is set: " + String(alarmHour) + ":" + fineStrMinute(alarmMinute) + "</p>";
+      main_page += "<p> Alarm is set: " + String(alarmHour) + ":" + fineStrMinute(alarmMinute) ;
+      main_page += " volume: " + String(alarmVolume) + " Song: " + alarmSong + "</p>";
     }
     if (flagModeDayNight) {
       main_page += "<p> Day starts: " + String(startDayHour) + ":" + fineStrMinute(startDayMinute) + " with volume: " + String(dayVolume) + "</p>";
@@ -483,13 +533,11 @@ void configMainPage() {
       flagModeAlarm = (flagModeAlarm) ? false : true; 
       EEPROM.write(ALARM_FLAG_ADDR,flagModeAlarm);
       EEPROM.commit();
-      request->send(200);
   });
   server.on("/modeDayNight", HTTP_GET, [](AsyncWebServerRequest *request){
       flagModeDayNight = (flagModeDayNight) ? false : true; 
       EEPROM.write(DAY_NIGHT_FLAG_ADDR,flagModeDayNight);
       EEPROM.commit();
-      request->send(200);
   });
 }
 const char* clock_page PROGMEM = R"rawliteral(
@@ -503,6 +551,7 @@ const char* clock_page PROGMEM = R"rawliteral(
   <form action="/setAlarm">
     <input type="text" name="alarmHour" placeholder="Hour" style="width: 40px;">
     <input type="text" name="alarmMinute" placeholder="Minute" style="width: 40px;">
+    <input type="text" name="alarmVolume" placeholder="Volume" style="width: 40px;">
     <input type="submit" value="Set Alarm">
   </form>
 
@@ -579,7 +628,7 @@ server.on("/setTime", HTTP_GET, [] (AsyncWebServerRequest *request) {
   }
   DateTime newTime = DateTime(now.year(), now.month(), now.day(), hour, minute, second);
   rtc.adjust(newTime);
-  request->send(200, "text/plain", "OK");
+  request->send(200, "text/html", createOkResponse("/time",1));
 });
 
   // Handle setting the alarm
@@ -595,11 +644,15 @@ server.on("/setTime", HTTP_GET, [] (AsyncWebServerRequest *request) {
         alarmMinute = p->value().toInt();
         EEPROM.write(ALARM_MIN_ADDR, alarmMinute);
       }
+      if(p->name()=="alarmVolume") {
+        alarmVolume = p->value().toInt();
+        EEPROM.write(ALARM_VOLUME_ADDR, alarmVolume);
+      }
     }
     flagModeAlarm = true;
     EEPROM.write(ALARM_FLAG_ADDR, flagModeAlarm);
     EEPROM.commit();
-    request->send(200, "text/plain", "OK");
+    request->send(200, "text/html", createOkResponse("/time",1));
   });
 
   server.on("/setStartDay", HTTP_GET, [] (AsyncWebServerRequest *request) {
@@ -622,7 +675,7 @@ server.on("/setTime", HTTP_GET, [] (AsyncWebServerRequest *request) {
     flagModeDayNight = true;
     EEPROM.write(DAY_NIGHT_FLAG_ADDR, flagModeDayNight);
     EEPROM.commit();
-    request->send(200, "text/plain", "OK");
+    request->send(200, "text/html", createOkResponse("/time",1));
   });
 
   server.on("/setStartNight", HTTP_GET, [] (AsyncWebServerRequest *request) {
@@ -646,7 +699,7 @@ server.on("/setTime", HTTP_GET, [] (AsyncWebServerRequest *request) {
     flagModeDayNight = true;
     EEPROM.write(DAY_NIGHT_FLAG_ADDR, flagModeDayNight);
     EEPROM.commit();
-    request->send(200, "text/plain", "OK");
+    request->send(200, "text/html", createOkResponse("/time",1));
   });
 
   server.on("/getTime", HTTP_GET, [] (AsyncWebServerRequest *request) {
@@ -701,4 +754,21 @@ String fineStrMinute(int minute){
   }
   fineMinute += String(minute); 
   return fineMinute;
+}
+String createOkResponse(const String& url, int delaySec) {
+  String delaySecStr = String(delaySec); 
+    return "<html>"
+           "<head>"
+           "<meta http-equiv='refresh' content='"+ delaySecStr + ";url=" + url + "'>"
+           "</head>"
+           "<body>OK. Redirecting in " + delaySecStr + " seconds...</body>"
+           "</html>";
+}
+int findIdSong(String tracksList[], int trackCount, const String& songName){
+  for (int i = 0; i < trackCount; i++) {
+    if (tracksList[i] == songName) {
+      return i;
+    }
+  }
+  return -1; 
 }
