@@ -36,6 +36,7 @@
 #define NIGHT_VOLUME_ADDR 209
 #define DAY_VOLUME_ADDR 210
 #define ALARM_VOLUME_ADDR 211
+#define SHUFFLE_FLAG_ADDR 212
 #define ALARM_SONG_ADDR 220
 #define MAX_ATTEMPTS 20            // How many repeates do WIFi connection
 #define MAX_SONGNAME_LENGTH 30
@@ -58,6 +59,7 @@ bool flagPrevSong = false;
 
 // Player modes
 bool flagModeAlarm = false;
+bool flagModeShuffle = false; 
 bool flagAlarm = false; 
 bool flagModeDayNight = false; 
 
@@ -113,6 +115,7 @@ void setup() {
   alarmMinute = EEPROM.read(ALARM_MIN_ADDR);
   flagModeAlarm = EEPROM.read(ALARM_FLAG_ADDR);
   flagModeDayNight = EEPROM.read(DAY_NIGHT_FLAG_ADDR);
+  flagModeShuffle = EEPROM.read(SHUFFLE_FLAG_ADDR); 
   startNightHour = EEPROM.read(START_NIGHT_HOUR_ADDR);
   startDayHour = EEPROM.read(START_DAY_HOUR_ADDR); 
   startNightMinute = EEPROM.read(START_NIGHT_MIN_ADDR); 
@@ -126,6 +129,7 @@ void setup() {
   alarmMinute = (alarmMinute > 59 || alarmMinute < 0) ? 0 : alarmMinute;
   flagModeAlarm = (flagModeAlarm > 1 || flagModeAlarm < 0) ? 0 : flagModeAlarm;
   flagModeDayNight = (flagModeDayNight > 1 || flagModeDayNight < 0) ? 0 : flagModeDayNight;
+  flagModeShuffle = (flagModeShuffle > 1 || flagModeShuffle < 0) ? 0 : flagModeShuffle;
   startNightHour = (startNightHour > 24 || startNightHour < 0) ? 0 : startNightHour;
   startDayHour =(startDayHour > 24 || startDayHour < 0) ? 0 : startDayHour;
   startNightMinute = (startNightMinute > 59 || startNightMinute < 0) ? 0 : startNightMinute;
@@ -163,7 +167,9 @@ void setup() {
     }
     file = rootDirectory.openNextFile();
   }
-  currentTrack = esp_random() % trackCount; // random(0, trackCount);
+  if (flagModeShuffle) {
+    currentTrack = esp_random() % trackCount; // random(0, trackCount);
+  }
   audio.connecttoSD(tracks[currentTrack].c_str());
   if (!alarmSongCheck) {
     int i = 0; 
@@ -217,7 +223,11 @@ void loop() {
 
 void audio_eof_mp3(const char *info) {
   if (trackCount > 0 ) {
-    currentTrack = (currentTrack + 1) % trackCount; // loop back to the first track after the last one
+    if (flagModeShuffle) {
+      currentTrack = esp_random() % trackCount;
+    } else {
+      currentTrack = (currentTrack + 1) % trackCount; // loop back to the first track after the last one
+    }
     audio.connecttoSD(tracks[currentTrack].c_str());  // start playing the next track
   }
 }
@@ -426,7 +436,8 @@ const char main_page_start[] PROGMEM= R"rawliteral(
 const char main_page_end[] PROGMEM= R"rawliteral(
 <b> Modes: </b>
 <button id="modeAlarm" type="button" onclick="setTimeout(function(){ location.reload(); }, 500);">Alarm</button> 
-<button id="modeDayNight" type="button" onclick="setTimeout(function(){ location.reload(); }, 500);">Day/Night</button> <br/>
+<button id="modeDayNight" type="button" onclick="setTimeout(function(){ location.reload(); }, 500);">Day/Night</button>
+<button id="modeShuffle" type="button" onclick="setTimeout(function(){ location.reload(); }, 500);">Shuffle</button> <br/>
 <a href="/playlist">Playlist</a><br/>
 <a href="/time">Time and Alarm</a><br/>
 <a href="/wifi">Wi-Fi settings</a><br/>
@@ -473,6 +484,11 @@ const char main_page_end[] PROGMEM= R"rawliteral(
       xhr.open("GET", "/modeDayNight", true);
       xhr.send();
   });
+  document.getElementById("modeShuffle").addEventListener("click", function(){
+      var xhr = new XMLHttpRequest();
+      xhr.open("GET", "/modeShuffle", true);
+      xhr.send();
+  });
   updateTrack();
   setInterval(updateTrack, 2000);
 </script>
@@ -485,6 +501,9 @@ void configMainPage() {
     String main_page = FPSTR(main_page_start);   // start the HTML
     main_page += R"rawliteral(<label id="volumeLabel1">Volume:)rawliteral" + String(currentVolume) + "</label> <br/> ";
     main_page += R"rawliteral(<input type="range" min="0" max="21" value=")rawliteral" + String(currentVolume) + R"rawliteral(" id="volumeSlider1"><br/>)rawliteral"; 
+    if (flagModeShuffle){
+      main_page += "<p> Shuffle mode playing... </p>";
+    }
     if (flagModeAlarm) {
       main_page += "<p> Alarm is set: " + String(alarmHour) + ":" + fineStrMinute(alarmMinute) ;
       main_page += " volume: " + String(alarmVolume) + " Song: " + alarmSong + "</p>";
@@ -537,6 +556,11 @@ void configMainPage() {
   server.on("/modeDayNight", HTTP_GET, [](AsyncWebServerRequest *request){
       flagModeDayNight = (flagModeDayNight) ? false : true; 
       EEPROM.write(DAY_NIGHT_FLAG_ADDR,flagModeDayNight);
+      EEPROM.commit();
+  });
+  server.on("/modeShuffle", HTTP_GET, [](AsyncWebServerRequest *request){
+      flagModeShuffle = (flagModeShuffle) ? false : true; 
+      EEPROM.write(SHUFFLE_FLAG_ADDR,flagModeShuffle);
       EEPROM.commit();
   });
 }
