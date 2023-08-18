@@ -441,6 +441,18 @@ void configPlaylistPage() {
       if(SD.remove("/" + filename)) {
         request->send(200, "text/html", createOkResponse("/playlist",1));
         deleteTrack(tracks, trackCount, filename);
+        if(filename == alarmSong) {
+          int i = 0; 
+          while(i < trackCount) {
+            if (tracks[i].length() <= MAX_SONGNAME_LENGTH) {
+              alarmSong = tracks[i];
+              writeStringEEPROM(ALARM_SONG_ADDR, alarmSong);
+              break;
+            } else {
+              i++; 
+            }
+          }
+        }
         if (flagModeShuffle) {
           for(int i = 0; i < trackCount; i++){
             tracksIdShuffled[i] = i; 
