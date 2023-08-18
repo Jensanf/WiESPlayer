@@ -44,6 +44,7 @@
 
 #define MAX_TRACKS 100
 String tracks[MAX_TRACKS];
+int tracksIdShuffled[MAX_TRACKS]; 
 int trackCount = 0;
 int currentTrack = 0;
 
@@ -54,6 +55,7 @@ const char* HOSTNAME = "esp32";
 
 // Global variables
 int currentVolume = 5; // Starting volume of audio player
+int indexShuffledTrack = 0; 
 bool flagNextSong = false; 
 bool flagPrevSong = false; 
 
@@ -168,7 +170,11 @@ void setup() {
     file = rootDirectory.openNextFile();
   }
   if (flagModeShuffle) {
-    currentTrack = esp_random() % trackCount; // random(0, trackCount);
+    for(int i = 0; i < trackCount; i++){
+      tracksIdShuffled[i] = i; 
+    }
+    shuffleArray(tracksIdShuffled, trackCount); 
+    currentTrack = tracksIdShuffled[indexShuffledTrack]; // random(0, trackCount);
   }
   audio.connecttoSD(tracks[currentTrack].c_str());
   if (!alarmSongCheck) {
@@ -210,12 +216,32 @@ void loop() {
     flagAlarm = true;  // Change flag of alarm to repeat it tomorrow
   }
   if (flagNextSong) {
-    currentTrack = (currentTrack + 1) % trackCount;
+    if (flagModeShuffle) {
+      indexShuffledTrack++;
+      if(indexShuffledTrack == trackCount) {
+        for(int i = 0; i < trackCount; i++){
+          tracksIdShuffled[i] = i; 
+        }
+        shuffleArray(tracksIdShuffled, trackCount); 
+        indexShuffledTrack = 0; 
+      }
+      currentTrack = tracksIdShuffled[indexShuffledTrack];
+    } else {
+      currentTrack = (currentTrack + 1) % trackCount;
+    }
     audio.connecttoSD(tracks[currentTrack].c_str());
     flagNextSong = false; 
   }
   if (flagPrevSong){
-    currentTrack = (currentTrack - 1 + trackCount) % trackCount;
+    if (flagModeShuffle) {
+      indexShuffledTrack--;
+      if (indexShuffledTrack < 0){
+        indexShuffledTrack = 0; 
+      }
+      currentTrack = tracksIdShuffled[indexShuffledTrack];
+    } else {
+      currentTrack = (currentTrack - 1 + trackCount) % trackCount;
+    }
     audio.connecttoSD(tracks[currentTrack].c_str());
     flagPrevSong = false; 
   }
@@ -224,7 +250,15 @@ void loop() {
 void audio_eof_mp3(const char *info) {
   if (trackCount > 0 ) {
     if (flagModeShuffle) {
-      currentTrack = esp_random() % trackCount;
+      indexShuffledTrack++;
+      if(indexShuffledTrack == trackCount) {
+        for(int i = 0; i < trackCount; i++){
+          tracksIdShuffled[i] = i; 
+        }
+        shuffleArray(tracksIdShuffled, trackCount); 
+        indexShuffledTrack = 0; 
+      }
+      currentTrack = tracksIdShuffled[indexShuffledTrack];
     } else {
       currentTrack = (currentTrack + 1) % trackCount; // loop back to the first track after the last one
     }
@@ -381,6 +415,12 @@ void configPlaylistPage() {
       if(final){
         if (isMusicFile(filename) && trackCount < MAX_TRACKS) {
           tracks[trackCount++] = filename;
+          if (flagModeShuffle) {
+            for(int i = 0; i < trackCount; i++) {
+              tracksIdShuffled[i] = i; 
+            }
+            shuffleArray(tracksIdShuffled, trackCount); 
+          }
           audio.pauseResume();
         }
         request->send(200, "text/plain", "refresh"); 
@@ -401,6 +441,12 @@ void configPlaylistPage() {
       if(SD.remove("/" + filename)) {
         request->send(200, "text/html", createOkResponse("/playlist",1));
         deleteTrack(tracks, trackCount, filename);
+        if (flagModeShuffle) {
+          for(int i = 0; i < trackCount; i++){
+            tracksIdShuffled[i] = i; 
+          }
+          shuffleArray(tracksIdShuffled, trackCount);  
+        }
       } else {
         request->send(500, "text/plain", "Delete failed");
       }
@@ -562,6 +608,13 @@ void configMainPage() {
       flagModeShuffle = (flagModeShuffle) ? false : true; 
       EEPROM.write(SHUFFLE_FLAG_ADDR,flagModeShuffle);
       EEPROM.commit();
+      if (flagModeShuffle) {
+        for(int i = 0; i < trackCount; i++){
+          tracksIdShuffled[i] = i; 
+        }
+        shuffleArray(tracksIdShuffled, trackCount); 
+        indexShuffledTrack = 0; 
+      }
   });
 }
 const char* clock_page PROGMEM = R"rawliteral(
@@ -795,4 +848,14 @@ int findIdSong(String tracksList[], int trackCount, const String& songName){
     }
   }
   return -1; 
+}
+void shuffleArray(int arr[], int n) {
+  for (int i = n - 1; i > 0; i--) {
+      // Generate a random index
+      int j = esp_random() % (i+1);
+      // Swap arr[i] and arr[j]
+      int temp = arr[i];
+      arr[i] = arr[j];
+      arr[j] = temp;
+  }
 }
