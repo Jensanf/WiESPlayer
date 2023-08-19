@@ -269,7 +269,7 @@ void audio_eof_mp3(const char *info) {
 bool isMusicFile(String fileName) {
   String extension = fileName.substring(fileName.lastIndexOf('.') + 1);
   extension.toLowerCase();
-  return (extension == "mp3" || extension == "MP3");
+  return (extension == "mp3" || extension == "MP3" || extension == "m4a" || extension == "wav" || extension == "WAV");
 }
 
 bool connectToGlobalWiFi(const char* ssid, const char* password) {
